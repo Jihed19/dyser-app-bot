@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" fill="none">
+  <!-- Fondo transparente -->
+  <rect width="400" height="400" fill="transparent" />
+
+  <!-- Anillo exterior azul marino institucional (#183375) -->
+  <path
+    d="M 305 92 A 146 146 0 1 1 240 56"
+    stroke="#183375"
+    stroke-width="36"
+    stroke-linecap="butt"
+    fill="none"
+  />
+
+  <!-- Panza circular concéntrica naranja (#fe6b00) -->
+  <circle
+    cx="200"
+    cy="195"
+    r="76"
+    stroke="#fe6b00"
+    stroke-width="38"
+    fill="none"
+  />
+
+  <!-- Asta ascendente estilizada en curva suave hacia la derecha -->
+  <path
+    d="M 257 195 L 257 136 C 257 78, 276 40, 295 18 C 297 19, 298 22, 298 28 L 298 195 Z"
+    fill="#fe6b00"
+  />
+</svg>

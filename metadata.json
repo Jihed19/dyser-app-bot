@@ -1,0 +1,11 @@
+{
+  "name": "dyser",
+  "description": "Plataforma de estudio académico impulsada por IA de nivel legendario: resúmenes inteligentes, digitalizador de pizarras, grabador de clases en vivo, resolución paso a paso, simulador de exámenes y tutor Nasser IA.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "dyser - Plataforma de Estudio Académico IA",
+  "short_name": "dyser",
+  "description": "Plataforma de estudio académico impulsada por IA para estudiantes de nivel legendario.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#00236f",
+  "background_color": "#00236f",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
