@@ -257,6 +257,22 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { theme, toggleTheme } = useTheme();
   const { isFocusMode, timeLeft, formatTime } = useFocus();
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   return (
     <header
@@ -280,7 +296,24 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center gap-2.5 group text-left transition-transform active:scale-95"
             aria-label="Ir al inicio de Dyser"
           >
-            <DyserLogo size="sm" showText={false} />
+            <div className="relative flex items-center justify-center shrink-0">
+              <DyserLogo size="sm" showText={false} />
+              {/* Indicador de estado de conexión online/offline */}
+              <span
+                id="header-network-status-dot"
+                title={isOnline ? 'Estado: En línea (Conectado)' : 'Estado: Sin conexión (Offline)'}
+                aria-label={isOnline ? 'Estado de red: En línea' : 'Estado de red: Sin conexión'}
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-[#f7f9fb] dark:ring-[#090d16] transition-colors duration-300 ${
+                  isOnline
+                    ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]'
+                    : 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]'
+                }`}
+              >
+                {isOnline && (
+                  <span className="absolute inset-0 rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                )}
+              </span>
+            </div>
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5">
                 <span className="font-black text-xl tracking-tight text-[#1a357f] dark:text-white group-hover:text-[#fe6b00] transition-colors">
