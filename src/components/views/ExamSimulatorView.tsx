@@ -29,6 +29,49 @@ export const ExamSimulatorView: React.FC = () => {
     grade: number;
     passed: boolean;
   } | null>(null);
+  const [researchNotice, setResearchNotice] = useState<string | null>(null);
+
+  // Carga automática si el estudiante generó un examen desde la investigación de Nasser AI
+  useEffect(() => {
+    try {
+      const storedTopic = sessionStorage.getItem('dyser_active_exam_topic');
+      const storedContext = sessionStorage.getItem('dyser_exam_research_context');
+      if (storedTopic) {
+        sessionStorage.removeItem('dyser_active_exam_topic');
+        sessionStorage.removeItem('dyser_exam_research_context');
+
+        const simulacro = nasserAI.generarSimulacroExamenElite(storedTopic, 3);
+        if (simulacro && simulacro.preguntas && simulacro.preguntas.length > 0) {
+          const newExam: ExamSimulation = {
+            id: `exam-research-${Date.now()}`,
+            title: `Examen: ${storedTopic}`,
+            subject: 'Investigación Nasser AI',
+            timeLimitMinutes: 12,
+            passingGrade: 70,
+            questions: simulacro.preguntas.map((p, idx) => {
+              const letterIndex = p.respuestaCorrecta === 'A' ? 0 : p.respuestaCorrecta === 'B' ? 1 : p.respuestaCorrecta === 'C' ? 2 : 3;
+              return {
+                id: `q-${idx + 1}`,
+                questionText: p.pregunta,
+                options: p.opciones,
+                correctOptionIndex: letterIndex,
+                explanation: p.explicacionCritica,
+              };
+            }),
+          };
+          setExam(newExam);
+          setTimeRemaining(12 * 60);
+          setSelectedAnswers({});
+          setCurrentQuestionIdx(0);
+          setIsExamFinished(false);
+          setScoreReport(null);
+          setResearchNotice(`Evaluación generada automáticamente desde tu investigación sobre "${storedTopic}"`);
+        }
+      }
+    } catch (e) {
+      console.warn('Error al cargar examen desde investigación de Nasser AI', e);
+    }
+  }, []);
 
   useEffect(() => {
     let timer: any;
@@ -90,6 +133,21 @@ export const ExamSimulatorView: React.FC = () => {
     <div className="w-full max-w-3xl mx-auto space-y-6 pb-12 animate-in fade-in duration-300">
       
       {/* Cabecera */}
+      {researchNotice && (
+        <div className="p-3.5 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/80 flex items-center justify-between gap-3 text-xs text-purple-900 dark:text-purple-200">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+            <span className="font-semibold">{researchNotice}</span>
+          </div>
+          <button
+            onClick={() => setResearchNotice(null)}
+            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline shrink-0"
+          >
+            Entendido
+          </button>
+        </div>
+      )}
+
       <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <span className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">

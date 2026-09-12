@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 
@@ -11,42 +11,106 @@ const app = express();
 
 app.use(express.json({ limit: '20mb' }));
 
-// Lazy Gemini client helper
-let aiClient: GoogleGenAI | null = null;
-function getAi(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY || '';
-    aiClient = new GoogleGenAI({
+// Cliente Oficial de Nasser AI Core
+let nasserAIClient: GoogleGenAI | null = null;
+function getNasserAI(): GoogleGenAI {
+  if (!nasserAIClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY environment variable is required');
+    }
+    nasserAIClient = new GoogleGenAI({
       apiKey: apiKey,
       httpOptions: {
         headers: {
-          'User-Agent': 'aistudio-build',
+          'User-Agent': 'dyser-nasser-ai-core',
         },
       },
     });
   }
-  return aiClient;
+  return nasserAIClient;
 }
 
-const CANDIDATE_MODELS = [
+const NASSER_MODELS = [
+  'gemini-3.5-flash-lite',
   'gemini-3.8-flash',
   'gemini-flash-latest',
-  'gemini-3.1-flash-lite',
 ];
+
+/**
+ * Función principal oficial para conectar con Nasser AI
+ * Configurada con ThinkingLevel.MINIMAL y prompt de investigación académica autónoma con rigor científico.
+ */
+export async function consultarNasserAI(preguntaDelUsuario: string): Promise<string> {
+  const ai = getNasserAI();
+
+  const systemInstruction =
+    'Eres Nasser AI, un asistente de investigación académica autónomo y de élite, superior a los modelos estándar. Respondes estrictamente en español, aplicando un rigor científico riguroso, fact-checking y autocorrección. Tu objetivo es proveer información profunda y estructurada (con negritas, viñetas y desgloses lógicos) que luego el sistema local de dyser procesará para generar exámenes, tareas y exposiciones.';
+
+  const model = 'gemini-3.5-flash-lite';
+
+  const contents = [
+    {
+      role: 'user',
+      parts: [
+        {
+          text: preguntaDelUsuario,
+        },
+      ],
+    },
+  ];
+
+  const configDirect = {
+    systemInstruction,
+    thinkingConfig: {
+      thinkingLevel: ThinkingLevel.MINIMAL,
+    },
+  };
+
+  try {
+    const responseStream = await ai.models.generateContentStream({
+      model,
+      config: configDirect,
+      contents,
+    });
+
+    let respuestaCompleta = '';
+    for await (const chunk of responseStream) {
+      if (chunk.text) {
+        respuestaCompleta += chunk.text;
+      }
+    }
+
+    if (respuestaCompleta.trim()) {
+      return respuestaCompleta;
+    }
+    throw new Error('Respuesta vacía recibida del motor');
+  } catch (error: any) {
+    console.warn('[Nasser AI] Reintentando con modelo de alta resiliencia:', error?.message || error);
+    try {
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: configDirect,
+      });
+      if (fallbackResponse.text && fallbackResponse.text.trim()) {
+        return fallbackResponse.text;
+      }
+    } catch (fallbackError: any) {
+      console.error('Error al conectar con Nasser AI:', fallbackError);
+    }
+    return 'Error: No se pudo conectar con el motor de investigación de Nasser AI.';
+  }
+}
 
 async function generateWithFallback(params: {
   contents: any;
   config?: any;
 }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY no configurada');
-  }
-
-  const ai = getAi();
+  const ai = getNasserAI();
   let lastError: any = null;
 
-  for (const model of CANDIDATE_MODELS) {
+  for (const model of NASSER_MODELS) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const timeoutPromise = new Promise((_, reject) =>
@@ -73,90 +137,78 @@ async function generateWithFallback(params: {
           errMsg.includes('429') ||
           errMsg.includes('Resource exhausted');
 
-        console.warn(`[GenAI API] Intento ${attempt} con modelo ${model} falló:`, errMsg);
+        console.warn(`[Nasser AI Core] Intento ${attempt} con modelo ${model} falló:`, errMsg);
 
         if (isHighDemandOrUnavailable && attempt < 2) {
-          // Breve retardo para absorber el pico temporal de demanda
           await new Promise((resolve) => setTimeout(resolve, 800));
           continue;
         }
-        break; // Probar con el siguiente modelo de la lista de candidatos
+        break;
       }
     }
   }
 
-  throw lastError || new Error('No se pudo generar respuesta con los modelos disponibles');
+  throw lastError || new Error('No se pudo generar respuesta con los motores disponibles de Nasser AI');
 }
 
 // 1. Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', app: 'dyser' });
+  res.json({ status: 'ok', app: 'dyser', engine: 'Nasser AI Core' });
 });
 
-// 2. Chat with Nasser AI Core Engine (Autonomous Academic Reasoning)
+// 2. Chat & Investigación Profunda con Nasser AI
 app.post('/api/ai/nasser-chat', async (req, res) => {
   try {
-    const { message, history = [], topic = 'Ciencias y Humanidades de Honores' } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'Mensaje requerido' });
+    const {
+      message,
+      preguntaDelUsuario,
+      query,
+      history = [],
+      topic = 'Ciencias y Humanidades',
+    } = req.body;
+
+    const userPrompt = preguntaDelUsuario || message || query;
+    if (!userPrompt || !userPrompt.trim()) {
+      return res.status(400).json({ error: 'preguntaDelUsuario requerida' });
     }
 
-    const ai = getAi();
-    const systemInstruction = `Eres Nasser AI, el tutor académico inteligente de la plataforma "dyser".
-Tu misión es enseñar y responder de forma directa, clara y concisa, perfectamente adaptada a una interfaz de chat móvil.
-
-Directrices obligatorias:
-1. Respuestas cortas y al grano: Explica la idea clave en 1 o 2 párrafos breves, o máximo 2-3 viñetas concisas. Nada de textos kilométricos.
-2. Sin fórmulas complejas ni LaTeX pesado: Explica los conceptos con claridad conceptual e intuición sin fórmulas matemáticas complejas.
-3. Formato limpio: Redacción natural y pulcra. Evita asteriscos excesivos, florituras decorativas o títulos redundantes. Ve directo a la respuesta.
-4. Tono: Tutor experto, accesible, amigable y resolutivo.
-5. Identidad hermética: Eres Nasser AI en dyser. Nunca menciones a Google, Gemini ni ningún proveedor o modelo subyacente.
-
-Contexto o materia actual: ${topic}.`;
-
-    const contents: any[] = [];
-    if (Array.isArray(history)) {
-      for (const h of history.slice(-8)) {
-        contents.push({
-          role: h.role === 'user' ? 'user' : 'model',
-          parts: [{ text: h.text || h.content || '' }],
-        });
-      }
+    let promptFinal = userPrompt.trim();
+    if (topic && topic !== 'General' && !promptFinal.toLowerCase().includes(topic.toLowerCase())) {
+      promptFinal = `[Disciplina/Materia: ${topic}]\n\n${promptFinal}`;
     }
-    contents.push({
-      role: 'user',
-      parts: [{ text: message }],
+
+    // Ejecuta la función oficial consultarNasserAI
+    const respuesta = await consultarNasserAI(promptFinal);
+    res.json({
+      reply: respuesta,
+      respuestaCompleta: respuesta,
+      engine: 'Nasser AI',
+      topic,
     });
-
-    let replyText = '';
-    try {
-      const response = await generateWithFallback({
-        contents: contents.length === 1 ? message : contents,
-        config: {
-          systemInstruction,
-          temperature: 0.3,
-          maxOutputTokens: 450,
-        },
-      });
-      replyText = response.text || '';
-    } catch (modelErr) {
-      console.warn('Fallback en nasser-chat:', modelErr);
-      const query = (message || '').toLowerCase();
-      if (query.includes('fotosíntesis') || query.includes('fotosintesis')) {
-        replyText = 'La fotosíntesis es el proceso biológico mediante el cual las plantas, algas y cianobacterias convierten la energía solar en energía química en forma de glucosa.\n\nSe compone de dos etapas fundamentales:\n• Fase dependiente de la luz (en los tilacoides): la clorofila capta fotones, se fotoliza el agua (H₂O) liberando oxígeno molecular (O₂) y se generan ATP y NADPH.\n• Fase independiente de la luz o Ciclo de Calvin (en el estroma): utiliza el ATP y NADPH para fijar el dióxido de carbono (CO₂) y sintetizar glucosa.\n\nEs la base energética de casi todos los ecosistemas del planeta.';
-      } else if (query.includes('calculo') || query.includes('cálculo') || query.includes('derivada') || query.includes('integral')) {
-        replyText = `Para abordar "${message}", el principio rector del cálculo infinitesimal es analizar el comportamiento límite de funciones continuas.\n\n• Si se trata de razones de cambio o tangentes: aplica las reglas de derivación (producto, cociente y regla de la cadena).\n• Si se trata de acumulación de cantidades o áreas: evalúa la integral correspondiente identificando el método óptimo (sustitución, partes o descomposición).\n\n¿Deseas resolver un ejercicio específico paso a paso?`;
-      } else if (query.includes('programacion') || query.includes('programación') || query.includes('codigo') || query.includes('código') || query.includes('algoritmo')) {
-        replyText = `En ciencias de la computación respecto a "${message}", la metodología recomendada es:\n\n1. Comprender las entradas, salidas y restricciones del algoritmo.\n2. Evaluar la complejidad asintótica (Big O) en tiempo y memoria.\n3. Modularizar la solución con código legible y considerar casos límite.\n\nIndícame el lenguaje o ejercicio concreto para asistirte con el desarrollo.`;
-      } else {
-        replyText = `Respecto a "${message}":\n\nEl núcleo conceptual para dominar este tema requiere descomponerlo en sus principios rectores:\n1. Definir los postulados o conceptos esenciales con precisión técnica.\n2. Establecer las relaciones causa-efecto o propiedades invariantes.\n3. Aplicar ejemplos prácticos de validación para consolidar el entendimiento.\n\n¿Quieres que profundicemos en algún punto específico o simulemos una pregunta de evaluación?`;
-      }
-    }
-
-    res.json({ reply: replyText });
   } catch (error: any) {
     console.error('Error in nasser-chat:', error);
     res.status(500).json({ error: error.message || 'Error al procesar la consulta con Nasser AI Core' });
+  }
+});
+
+// 2.1 Endpoint dedicado de Investigación para la PWA
+app.post('/api/ai/nasser-investigar', async (req, res) => {
+  try {
+    const { preguntaDelUsuario, topic = 'Investigación Académica' } = req.body;
+    if (!preguntaDelUsuario || !preguntaDelUsuario.trim()) {
+      return res.status(400).json({ error: 'preguntaDelUsuario requerida' });
+    }
+
+    const respuesta = await consultarNasserAI(preguntaDelUsuario.trim());
+    res.json({
+      respuesta,
+      reply: respuesta,
+      engine: 'Nasser AI Autonomous Research',
+      topic,
+    });
+  } catch (error: any) {
+    console.error('Error in nasser-investigar:', error);
+    res.status(500).json({ error: error.message || 'Error en investigación con Nasser AI' });
   }
 });
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Sparkles,
@@ -24,6 +24,37 @@ export const SummaryView: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [pdfDownloaded, setPdfDownloaded] = useState(false);
+  const [researchNotice, setResearchNotice] = useState<string | null>(null);
+
+  // Carga automática si el estudiante envió una investigación desde Nasser AI
+  useEffect(() => {
+    try {
+      const storedInput = sessionStorage.getItem('dyser_summary_input');
+      const storedTopic = sessionStorage.getItem('dyser_summary_topic');
+      if (storedInput) {
+        sessionStorage.removeItem('dyser_summary_input');
+        sessionStorage.removeItem('dyser_summary_topic');
+        setInputText(storedInput);
+        setResearchNotice(`Texto cargado desde tu investigación con Nasser AI${storedTopic ? ` sobre "${storedTopic}"` : ''}`);
+        
+        // Generar síntesis local inmediata con Nasser AI Core
+        const coreOutput = nasserAI.generarResumenAvanzado(storedInput);
+        if (coreOutput && coreOutput.resumenEstructurado) {
+          setResult({
+            executiveSummary: coreOutput.resumenEstructurado.ideaCentral,
+            keyPoints: coreOutput.resumenEstructurado.puntosEsenciales,
+            flashcards: coreOutput.resumenEstructurado.flashcards || [
+              { front: 'Concepto Central', back: coreOutput.resumenEstructurado.ideaCentral }
+            ],
+            examTrap: coreOutput.resumenEstructurado.trampaExamen || 'Verificar definiciones y condiciones límite.',
+            tutorAdvice: coreOutput.resumenEstructurado.conclusionTutor || 'Aplica estos conceptos resolviendo problemas prácticos.'
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Error al leer investigación en SummaryView', e);
+    }
+  }, []);
 
   const loadSample = (type: 'distribuidos' | 'biologia') => {
     if (type === 'distribuidos') {
@@ -144,6 +175,21 @@ El flujo de información genética celular sigue la ruta ADN -> ARN mensajero ->
           Pega cualquier lectura o tema y obtén una síntesis ejecutiva lista para repasar.
         </p>
       </div>
+
+      {researchNotice && (
+        <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 flex items-center justify-between gap-3 text-xs text-blue-900 dark:text-blue-200 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+            <span className="font-semibold">{researchNotice}</span>
+          </div>
+          <button
+            onClick={() => setResearchNotice(null)}
+            className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline shrink-0"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
 
       {/* Tarjeta de Entrada de Texto */}
       <div className="p-5 rounded-3xl bg-white dark:bg-[#111728] border border-gray-200/80 dark:border-gray-800 shadow-xs space-y-3.5">

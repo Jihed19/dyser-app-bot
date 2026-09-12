@@ -38,6 +38,21 @@ export const MultimediaCreatorView: React.FC = () => {
   const [slideTemplate, setSlideTemplate] = useState('Academic Canva Pro');
   const [slideCount, setSlideCount] = useState(4);
   const [isGeneratingSlides, setIsGeneratingSlides] = useState(false);
+  const [researchNotice, setResearchNotice] = useState<string | null>(null);
+
+  // Carga automática si el estudiante preparó diapositivas desde Nasser AI
+  React.useEffect(() => {
+    try {
+      const storedTopic = sessionStorage.getItem('dyser_multimedia_topic');
+      if (storedTopic) {
+        sessionStorage.removeItem('dyser_multimedia_topic');
+        setSlideTopic(storedTopic);
+        setResearchNotice(`Tema de exposición transferido desde Nasser AI: "${storedTopic}"`);
+      }
+    } catch (e) {
+      console.warn('Error al leer tema multimedia', e);
+    }
+  }, []);
 
   const currentSlide: SlideItem = deck.slides[currentSlideIndex] || deck.slides[0];
 

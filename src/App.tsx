@@ -214,6 +214,8 @@ const AppContent: React.FC = () => {
           <NasserChatView
             studentName={student.name}
             onNavigateTo={(tab) => setActiveTab(tab)}
+            onAddTask={handleAddTask}
+            onShowToast={addToast}
           />
         );
       case 'summary':

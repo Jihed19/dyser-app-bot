@@ -21,11 +21,23 @@ import {
   Palette,
   GraduationCap,
   Sparkles,
+  BookmarkPlus,
+  Dna,
+  Atom,
+  Binary,
+  BookOpen,
 } from 'lucide-react';
-import { ChatMessage, ChatSession, ActiveTab } from '../../types';
+import { ChatMessage, ChatSession, ActiveTab, AcademicTask } from '../../types';
 import { STUDENT_AVATAR } from '../../data/mockData';
 import { nasserAI } from '../../services/nasserEngines';
-import { sendLiveNasserQuery } from '../../services/nasserLiveApi';
+import {
+  sendLiveNasserQuery,
+  transferirInvestigacionAExamen,
+  transferirInvestigacionAResumen,
+  transferirInvestigacionAExposicion,
+  capturarInvestigacionDyser,
+} from '../../services/nasserLiveApi';
+import { sounds } from '../../services/soundEffects';
 import {
   subscribeToChatSessions,
   saveChatSessionToFirestore,
@@ -36,6 +48,8 @@ import {
 interface NasserChatViewProps {
   studentName?: string;
   onNavigateTo?: (tab: ActiveTab) => void;
+  onAddTask?: (task: Omit<AcademicTask, 'id'>) => void;
+  onShowToast?: (toast: { title: string; message: string; type: 'success' | 'info' | 'warning' }) => void;
 }
 
 const NASSER_GREETINGS = [
@@ -49,9 +63,109 @@ const NASSER_GREETINGS = [
   (name: string) => `¡Hola, ${name}! ¿Practicamos para tu presentación oral?`,
 ];
 
+const ACADEMIC_DISCIPLINES = [
+  { id: 'General', name: 'General', icon: Sparkles },
+  { id: 'Biología', name: 'Biología', icon: Dna, prompt: 'Investiga con rigor biológico y desglosa: ' },
+  { id: 'Física', name: 'Física', icon: Atom, prompt: 'Analiza con leyes físicas y fórmulas: ' },
+  { id: 'Cálculo', name: 'Cálculo', icon: Calculator, prompt: 'Demuestra y resuelve con rigor matemático: ' },
+  { id: 'Algoritmos', name: 'Algoritmos', icon: Binary, prompt: 'Estructura el análisis computacional de: ' },
+  { id: 'Humanidades', name: 'Humanidades', icon: BookOpen, prompt: 'Desarrolla un análisis crítico y fundamentado de: ' },
+];
+
+// Componente para renderizar la respuesta académica estructurada (negritas, listas, viñetas, desgloses)
+const AcademicTextRenderer: React.FC<{ content: string }> = ({ content }) => {
+  const lines = content.split('\n');
+
+  const formatInline = (text: string) => {
+    const regex = /(\*\*.*?\*\*|`.*?`)/g;
+    const parts = text.split(regex);
+
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={i} className="font-extrabold text-gray-900 dark:text-white">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <code key={i} className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-mono text-[12px]">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      return part;
+    });
+  };
+
+  return (
+    <div className="space-y-2 text-xs sm:text-[14px] text-gray-800 dark:text-gray-200 leading-relaxed font-normal">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={idx} className="h-1.5" />;
+        }
+
+        // Subtítulos H3
+        if (trimmed.startsWith('### ')) {
+          return (
+            <h4 key={idx} className="text-xs sm:text-sm font-black text-[#00236f] dark:text-[#90a8ff] mt-3.5 mb-1.5 tracking-tight flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#fe6b00]" />
+              {formatInline(trimmed.replace(/^###\s+/, ''))}
+            </h4>
+          );
+        }
+
+        // Títulos principales H2
+        if (trimmed.startsWith('## ') || trimmed.startsWith('# ')) {
+          return (
+            <h3 key={idx} className="text-sm sm:text-base font-black text-gray-900 dark:text-white mt-4 mb-2 tracking-tight border-b border-gray-100 dark:border-gray-800 pb-1">
+              {formatInline(trimmed.replace(/^#+\s+/, ''))}
+            </h3>
+          );
+        }
+
+        // Viñetas estilo lista
+        if (trimmed.startsWith('•') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+          const bulletContent = trimmed.replace(/^[•\-\*]\s*/, '');
+          return (
+            <div key={idx} className="flex items-start gap-2.5 pl-1 my-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-[#00236f] dark:bg-indigo-400 shrink-0 mt-2" />
+              <div className="flex-1 min-w-0">{formatInline(bulletContent)}</div>
+            </div>
+          );
+        }
+
+        // Listas numeradas
+        const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+        if (numMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2.5 pl-1 my-1.5">
+              <span className="w-4 h-4 rounded-full bg-indigo-50 dark:bg-indigo-950/80 text-[#00236f] dark:text-indigo-300 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5 border border-indigo-200/50 dark:border-indigo-800/60">
+                {numMatch[1]}
+              </span>
+              <div className="flex-1 min-w-0">{formatInline(numMatch[2])}</div>
+            </div>
+          );
+        }
+
+        // Párrafo estándar
+        return (
+          <p key={idx} className="my-1">
+            {formatInline(trimmed)}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 export const NasserChatView: React.FC<NasserChatViewProps> = ({
   studentName = 'Alejandro Valenzuela',
   onNavigateTo,
+  onAddTask,
+  onShowToast,
 }) => {
   const [sessions, setSessions] = useState<ChatSession[]>([defaultInitialSession]);
   const [activeSessionId, setActiveSessionId] = useState<string>(defaultInitialSession.id);
@@ -61,6 +175,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [firebaseStatus, setFirebaseStatus] = useState<'connected' | 'saving' | 'synced'>('connected');
+  const [selectedSubject, setSelectedSubject] = useState<string>('General');
   
   // Saludo dinámico que cambia cada vez que el estudiante ingresa a Nasser IA
   const [greeting] = useState<string>(() => {
@@ -393,7 +508,11 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
         text: m.text,
       }));
 
-      const liveReply = await sendLiveNasserQuery(text.trim(), historyPayload);
+      const liveReply = await sendLiveNasserQuery(
+        text.trim(),
+        historyPayload,
+        selectedSubject !== 'General' ? selectedSubject : undefined
+      );
 
       const aiMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
@@ -453,6 +572,61 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
     setTimeout(() => setCopiedIdx(null), 2000);
+  };
+
+  // Acciones locales dyser a partir de la investigación de Nasser AI
+  const handleActionGenerarExamen = (topic: string, text: string) => {
+    const cleanTopic = topic && topic !== 'Nueva Conversación' ? topic : (selectedSubject !== 'General' ? selectedSubject : 'Investigación Académica');
+    transferirInvestigacionAExamen(cleanTopic, text);
+    sounds.playChirp();
+    if (onNavigateTo) {
+      onNavigateTo('exam-simulator');
+    }
+  };
+
+  const handleActionGenerarResumen = (topic: string, text: string) => {
+    const cleanTopic = topic && topic !== 'Nueva Conversación' ? topic : (selectedSubject !== 'General' ? selectedSubject : 'Investigación Académica');
+    transferirInvestigacionAResumen(cleanTopic, text);
+    sounds.playChirp();
+    if (onNavigateTo) {
+      onNavigateTo('summary');
+    }
+  };
+
+  const handleActionGenerarExposicion = (topic: string, text: string) => {
+    const cleanTopic = topic && topic !== 'Nueva Conversación' ? topic : (selectedSubject !== 'General' ? selectedSubject : 'Investigación Académica');
+    transferirInvestigacionAExposicion(cleanTopic, text);
+    sounds.playChirp();
+    if (onNavigateTo) {
+      onNavigateTo('multimedia');
+    }
+  };
+
+  const handleActionGuardarComoTarea = (topic: string, text: string) => {
+    const cleanTopic = topic && topic !== 'Nueva Conversación' ? topic : (selectedSubject !== 'General' ? selectedSubject : 'Investigación Académica');
+    const taskTitle = `Repasar: ${cleanTopic.slice(0, 36)}`;
+
+    if (onAddTask) {
+      onAddTask({
+        title: taskTitle,
+        subject: selectedSubject !== 'General' ? selectedSubject : 'Investigación',
+        deadline: 'Próxima sesión',
+        status: 'pendiente',
+        priority: 'media',
+        isOverdue: false,
+        aiRecommendation: 'Repasar los puntos clave y conceptos investigados con Nasser AI.',
+      });
+    }
+
+    if (onShowToast) {
+      onShowToast({
+        title: 'Investigación guardada',
+        message: `Se ha creado la tarea "${taskTitle}" en tu planificador.`,
+        type: 'success',
+      });
+    }
+
+    sounds.playSuccess();
   };
 
   const filteredSessions = sessions.filter(s =>
@@ -660,7 +834,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
         {/* ------------------------------------------------------------- */}
         {/* ÁREA CENTRAL: */}
         {/* SIN MENSAJES -> SALUDO DINÁMICO + HERRAMIENTAS DE ESTUDIO */}
-        {/* CON MENSAJES -> HILO FLUIDO ESTILO GEMINI */}
+        {/* CON MENSAJES -> HILO FLUIDO DE INVESTIGACIÓN CON NASSER AI */}
         {/* ------------------------------------------------------------- */}
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 custom-scrollbar flex flex-col">
           {messages.length === 0 ? (
@@ -760,7 +934,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                   );
                 }
 
-                // Respuesta de Nasser AI: Formato de TEXTO PURO estilo Google Gemini (sin caja, sin marco de tarjeta, sin burbuja)
+                // Respuesta de Nasser AI: Formato de TEXTO PURO estructurado con rigor científico
                 return (
                   <div
                     key={msg.id || `msg-${idx}`}
@@ -771,7 +945,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                       <Sparkles className="w-4 h-4 text-amber-300" />
                     </div>
 
-                    {/* Contenido como texto editorial puro (estilo Gemini) */}
+                    {/* Contenido como texto editorial estructurado */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className="text-xs font-bold text-gray-900 dark:text-white">
@@ -782,39 +956,72 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                         </span>
                       </div>
 
-                      {/* Texto renderizado directamente en el lienzo */}
-                      <div className="text-xs sm:text-[14px] text-gray-800 dark:text-gray-200 leading-relaxed font-normal whitespace-pre-wrap selection:bg-indigo-100 dark:selection:bg-indigo-950">
-                        {msg.text}
-                      </div>
+                      {/* Texto renderizado con desglose académico, negritas y viñetas */}
+                      <AcademicTextRenderer content={msg.text} />
 
-                      {/* Barra inferior de acciones (Copiar y Borrar respuesta) */}
-                      <div className="flex items-center gap-2 mt-3 pt-0.5 text-gray-400 opacity-90 sm:opacity-0 group-hover:opacity-100 transition">
+                      {/* Barra de Acciones Locales dyser (Examen, Resumen, Exposición, Tarea) */}
+                      <div className="mt-3.5 pt-2.5 border-t border-gray-100 dark:border-gray-800/80 flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mr-0.5 flex items-center gap-1">
+                          <Sparkles className="w-3 h-3 text-[#fe6b00]" />
+                          Acciones Locales:
+                        </span>
+
                         <button
-                          onClick={() => copyMessageText(msg.text, idx)}
-                          className="px-2 py-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800/80 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition flex items-center gap-1.5 text-[11px] font-medium"
-                          title="Copiar texto"
+                          onClick={() => handleActionGenerarExamen(activeSession.title, msg.text)}
+                          className="px-2.5 py-1.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-purple-200/70 dark:border-purple-800/60 active:scale-95 shadow-2xs"
+                          title="Generar examen adaptativo local con esta investigación"
                         >
-                          {copiedIdx === idx ? (
-                            <>
+                          <GraduationCap className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                          <span>Generar Examen</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleActionGenerarResumen(activeSession.title, msg.text)}
+                          className="px-2.5 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-blue-200/70 dark:border-blue-800/60 active:scale-95 shadow-2xs"
+                          title="Sintetizar en resumen ejecutivo y flashcards"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                          <span>Resumen & Flashcards</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleActionGenerarExposicion(activeSession.title, msg.text)}
+                          className="px-2.5 py-1.5 rounded-xl bg-orange-50 dark:bg-orange-950/40 hover:bg-orange-100 dark:hover:bg-orange-900/60 text-[#fe6b00] text-[11px] font-bold transition flex items-center gap-1.5 border border-orange-200/70 dark:border-orange-800/60 active:scale-95 shadow-2xs"
+                          title="Estructurar diapositivas y puntos de exposición"
+                        >
+                          <Palette className="w-3.5 h-3.5 text-[#fe6b00]" />
+                          <span>Puntos de Exposición</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleActionGuardarComoTarea(activeSession.title, msg.text)}
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-emerald-200/70 dark:border-emerald-800/60 active:scale-95 shadow-2xs"
+                          title="Guardar investigación como tarea académica"
+                        >
+                          <BookmarkPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>Guardar como Tarea</span>
+                        </button>
+
+                        <div className="ml-auto flex items-center gap-1">
+                          <button
+                            onClick={() => copyMessageText(msg.text, idx)}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/80 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition"
+                            title="Copiar texto"
+                          >
+                            {copiedIdx === idx ? (
                               <Check className="w-3.5 h-3.5 text-emerald-500" />
-                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Copiado</span>
-                            </>
-                          ) : (
-                            <>
+                            ) : (
                               <Copy className="w-3.5 h-3.5" />
-                              <span>Copiar</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteMessage(msg.id)}
-                          className="px-2 py-1 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 text-gray-500 dark:text-gray-400 hover:text-rose-500 transition flex items-center gap-1.5 text-[11px] font-medium"
-                          title="Eliminar esta respuesta"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Borrar</span>
-                        </button>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMessage(msg.id)}
+                            className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-gray-400 hover:text-rose-500 transition"
+                            title="Eliminar esta respuesta"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -832,7 +1039,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                     </span>
                     <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
                       <RotateCw className="w-3.5 h-3.5 animate-spin text-[#fe6b00]" />
-                      <span>Escribiendo respuesta...</span>
+                      <span>Investigando y estructurando con rigor académico...</span>
                     </div>
                   </div>
                 </div>
@@ -852,11 +1059,42 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
               e.preventDefault();
               handleSend();
             }}
-            className="max-w-3xl w-full mx-auto"
+            className="max-w-3xl w-full mx-auto space-y-2"
           >
+            {/* Píldoras de Disciplina Académica para enfocar la investigación */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+              <span className="text-[11px] font-bold text-gray-400 dark:text-gray-500 shrink-0 mr-1">
+                Disciplina:
+              </span>
+              {ACADEMIC_DISCIPLINES.map(disc => {
+                const isSelected = selectedSubject === disc.id;
+                const Icon = disc.icon;
+                return (
+                  <button
+                    key={disc.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSubject(disc.id);
+                      if (disc.prompt && !input.trim()) {
+                        setInput(disc.prompt);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1.5 shrink-0 transition active:scale-95 ${
+                      isSelected
+                        ? 'bg-[#00236f] text-white shadow-xs dark:bg-indigo-600'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    <span>{disc.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Feedback de voz cuando está escuchando */}
             {isListening && (
-              <div className="flex items-center gap-2 mb-2 px-3 py-1 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 text-xs font-semibold w-fit mx-auto border border-rose-500/30 animate-pulse shadow-xs">
+              <div className="flex items-center gap-2 mb-1 px-3 py-1 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 text-xs font-semibold w-fit mx-auto border border-rose-500/30 animate-pulse shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                 <span>{speechFeedback || 'Escuchando tu voz... Habla ahora'}</span>
               </div>
@@ -867,7 +1105,11 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                 type="text"
                 value={input}
                 onChange={e => setInput(e.target.value)}
-                placeholder="Escribe tu consulta o pide una explicación paso a paso..."
+                placeholder={
+                  selectedSubject === 'General'
+                    ? 'Escribe tu consulta o tema a investigar a fondo...'
+                    : `Investigar sobre ${selectedSubject}...`
+                }
                 className="w-full py-3 pl-4 pr-24 text-xs sm:text-sm text-gray-900 dark:text-white bg-transparent focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
               />
 
