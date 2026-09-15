@@ -26,6 +26,10 @@ import {
   Atom,
   Binary,
   BookOpen,
+  Square,
+  Radio,
+  Layers,
+  ArrowRight,
 } from 'lucide-react';
 import { ChatMessage, ChatSession, ActiveTab, AcademicTask } from '../../types';
 import { STUDENT_AVATAR } from '../../data/mockData';
@@ -37,6 +41,11 @@ import {
   transferirInvestigacionAExposicion,
   capturarInvestigacionDyser,
 } from '../../services/nasserLiveApi';
+import {
+  saveAudioRecord,
+  getAudioRecord,
+  blobToBase64,
+} from '../../services/audioStorage';
 import { sounds } from '../../services/soundEffects';
 import {
   subscribeToChatSessions,
@@ -50,6 +59,7 @@ interface NasserChatViewProps {
   onNavigateTo?: (tab: ActiveTab) => void;
   onAddTask?: (task: Omit<AcademicTask, 'id'>) => void;
   onShowToast?: (toast: { title: string; message: string; type: 'success' | 'info' | 'warning' }) => void;
+  investigatingTask?: { title: string; subject: string; id?: string } | null;
 }
 
 const NASSER_GREETINGS = [
@@ -72,9 +82,75 @@ const ACADEMIC_DISCIPLINES = [
   { id: 'Humanidades', name: 'Humanidades', icon: BookOpen, prompt: 'Desarrolla un análisis crítico y fundamentado de: ' },
 ];
 
+// Sanitizador para eliminar fórmulas crudas en LaTeX, bloques de código innecesarios y convertirlos a lenguaje natural
+const sanitizeAcademicText = (raw: string): string => {
+  if (!raw) return '';
+
+  let text = raw;
+
+  // 1. Eliminar entornos completos de LaTeX (\begin{...} ... \end{...})
+  text = text.replace(/\\begin\{[a-zA-Z*]+\}([\s\S]*?)\\end\{[a-zA-Z*]+\}/g, '$1');
+
+  // 2. Convertir delimitadores de bloque y matemáticos $$ ... $$ y $ ... $
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, '$1');
+  text = text.replace(/\$([^\$\n]+)\$/g, '$1');
+
+  // 3. Traducir comandos LaTeX comunes a lenguaje natural / símbolos limpios
+  text = text.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1 / $2)');
+  text = text.replace(/\\sqrt\{([^}]+)\}/g, '√($1)');
+  text = text.replace(/\\sqrt\[(\d+)\]\{([^}]+)\}/g, '$1√($2)');
+  text = text.replace(/\\times/g, ' × ');
+  text = text.replace(/\\cdot/g, ' · ');
+  text = text.replace(/\\pm/g, ' ± ');
+  text = text.replace(/\\approx/g, ' ≈ ');
+  text = text.replace(/\\neq/g, ' ≠ ');
+  text = text.replace(/\\leq/g, ' ≤ ');
+  text = text.replace(/\\geq/g, ' ≥ ');
+  text = text.replace(/\\infty/g, ' ∞ ');
+  text = text.replace(/\\alpha/g, 'α');
+  text = text.replace(/\\beta/g, 'β');
+  text = text.replace(/\\gamma/g, 'γ');
+  text = text.replace(/\\Delta/g, 'Δ');
+  text = text.replace(/\\delta/g, 'δ');
+  text = text.replace(/\\pi/g, 'π');
+  text = text.replace(/\\theta/g, 'θ');
+  text = text.replace(/\\lambda/g, 'λ');
+  text = text.replace(/\\mu/g, 'μ');
+  text = text.replace(/\\sigma/g, 'σ');
+  text = text.replace(/\\omega/g, 'ω');
+  text = text.replace(/\\Omega/g, 'Ω');
+  text = text.replace(/\\partial/g, '∂');
+  text = text.replace(/\\int/g, '∫');
+  text = text.replace(/\\sum/g, '∑');
+  text = text.replace(/\\in/g, ' ∈ ');
+  text = text.replace(/\\notin/g, ' ∉ ');
+  text = text.replace(/\\subset/g, ' ⊂ ');
+  text = text.replace(/\\forall/g, 'para todo ');
+  text = text.replace(/\\exists/g, 'existe ');
+  text = text.replace(/\\to|\\rightarrow/g, ' → ');
+  text = text.replace(/\\Rightarrow/g, ' ⇒ ');
+  text = text.replace(/\\Leftrightarrow/g, ' ⇔ ');
+
+  // 4. Limpiar comandos de formato \text{...}, \mathbf{...}, \mathit{...}, \mathbb{...}
+  text = text.replace(/\\text\{([^}]+)\}/g, '$1');
+  text = text.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+  text = text.replace(/\\mathit\{([^}]+)\}/g, '$1');
+  text = text.replace(/\\mathbb\{([^}]+)\}/g, '$1');
+  text = text.replace(/\\mathrm\{([^}]+)\}/g, '$1');
+
+  // 5. Eliminar barras invertidas residuales aisladas
+  text = text.replace(/\\([a-zA-Z]+)/g, '$1');
+
+  // 6. Eliminar bloques triples de código crudo innecesarios (```latex, ```code) si envuelven texto académico
+  text = text.replace(/```(?:latex|tex|code|text)?\n([\s\S]*?)```/g, '$1');
+
+  return text;
+};
+
 // Componente para renderizar la respuesta académica estructurada (negritas, listas, viñetas, desgloses)
 const AcademicTextRenderer: React.FC<{ content: string }> = ({ content }) => {
-  const lines = content.split('\n');
+  const sanitized = sanitizeAcademicText(content);
+  const lines = sanitized.split('\n');
 
   const formatInline = (text: string) => {
     const regex = /(\*\*.*?\*\*|`.*?`)/g;
@@ -126,6 +202,20 @@ const AcademicTextRenderer: React.FC<{ content: string }> = ({ content }) => {
           );
         }
 
+        // Bloques de cita / contexto
+        if (trimmed.startsWith('> ')) {
+          return (
+            <div key={idx} className="p-2.5 my-1.5 rounded-xl bg-blue-50/70 dark:bg-blue-950/40 border-l-4 border-[#00236f] dark:border-indigo-400 text-xs text-gray-700 dark:text-gray-300">
+              {formatInline(trimmed.replace(/^>\s+/, ''))}
+            </div>
+          );
+        }
+
+        // Separadores
+        if (trimmed === '---' || trimmed === '***') {
+          return <hr key={idx} className="my-3 border-gray-200 dark:border-gray-800" />;
+        }
+
         // Viñetas estilo lista
         if (trimmed.startsWith('•') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
           const bulletContent = trimmed.replace(/^[•\-\*]\s*/, '');
@@ -166,6 +256,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   onNavigateTo,
   onAddTask,
   onShowToast,
+  investigatingTask,
 }) => {
   const [sessions, setSessions] = useState<ChatSession[]>([defaultInitialSession]);
   const [activeSessionId, setActiveSessionId] = useState<string>(defaultInitialSession.id);
@@ -189,6 +280,188 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   const [speechFeedback, setSpeechFeedback] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Flujo 1: Grabación de clases en vivo directa en el chat con regla estricta de Cero Resúmenes
+  const [isLiveClassRecording, setIsLiveClassRecording] = useState(false);
+  const [liveClassSeconds, setLiveClassSeconds] = useState(0);
+  const liveClassTimerRef = useRef<any>(null);
+  const liveClassTranscriptRef = useRef<string>('');
+  const liveClassMediaStreamRef = useRef<MediaStream | null>(null);
+  const liveClassMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const liveClassAudioChunksRef = useRef<Blob[]>([]);
+
+  const [activeInvestigation, setActiveInvestigation] = useState<{
+    title: string;
+    subject: string;
+    id?: string;
+    description?: string;
+    dueDate?: string;
+  } | null>(null);
+
+  // Formateador de pregunta enfocada en el tema para investigación limpia
+  const formatTopicQuestion = (title: string) => {
+    let t = (title || '').trim();
+    t = t.replace(/^(?:tarea|actividad|investigación|investigar|estudio)\s*[:\-]\s*/i, '').trim();
+    if (/^(el|la|los|las|un|una|unos|unas)\s+/i.test(t)) {
+      return `¿Qué quieres saber sobre ${t.charAt(0).toLowerCase() + t.slice(1)}?`;
+    }
+    return `¿Qué quieres saber sobre ${t}?`;
+  };
+
+  // Detección e inicialización automática de tarea para investigar: PANTALLA LIMPIA
+  useEffect(() => {
+    const pending = investigatingTask || (() => {
+      try {
+        const stored = sessionStorage.getItem('dyser_investigate_task');
+        if (stored) {
+          sessionStorage.removeItem('dyser_investigate_task');
+          return JSON.parse(stored);
+        }
+      } catch (_) {}
+      return null;
+    })();
+
+    if (pending && pending.title) {
+      setActiveInvestigation(pending);
+      setSelectedSubject(pending.subject || 'General');
+
+      // Sincronización de tema investigado para exámenes y exposiciones
+      sessionStorage.setItem('dyser_last_research_topic', pending.title);
+      sessionStorage.setItem('dyser_active_exam_topic', pending.title);
+      sessionStorage.setItem('dyser_active_expo_topic', pending.title);
+
+      const newSessionId = `session-inv-${Date.now()}`;
+
+      // REGLA CRÍTICA: CERO bloques largos autogenerados por su cuenta.
+      // La conversación inicia totalmente limpia esperando la consulta del estudiante.
+      const newResearchSession: ChatSession = {
+        id: newSessionId,
+        title: `Investigación: ${pending.title}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [],
+        topic: pending.title,
+      };
+
+      setSessions(prev => [newResearchSession, ...prev]);
+      setActiveSessionId(newSessionId);
+      saveChatSessionToFirestore(newResearchSession);
+
+      if (onShowToast) {
+        onShowToast({
+          title: '🔬 Investigación de Tarea',
+          message: `Escribe tu consulta sobre "${pending.title}".`,
+          type: 'info',
+        });
+      }
+    }
+  }, [investigatingTask]);
+
+  const handleGoToExamPractice = (topicText?: string, contextText?: string) => {
+    const finalTopic = topicText || activeInvestigation?.title || activeSession.title || 'Tema de Estudio';
+    sessionStorage.setItem('dyser_active_exam_topic', finalTopic);
+    sessionStorage.setItem('dyser_last_research_topic', finalTopic);
+    if (contextText) {
+      sessionStorage.setItem('dyser_exam_research_context', contextText);
+    }
+    sounds.playChirp();
+    if (onNavigateTo) {
+      onNavigateTo('exam-simulator');
+    } else {
+      window.dispatchEvent(new CustomEvent('dyser-navigate', { detail: 'exam-simulator' }));
+    }
+    if (onShowToast) {
+      onShowToast({
+        title: '🎯 Ruta 1: Examen Interactivo',
+        message: 'Iniciando práctica tipo Duolingo con corrección en tiempo real.',
+        type: 'info',
+      });
+    }
+  };
+
+  const handleGoToExpositionStudy = (topicText?: string, contextText?: string) => {
+    const finalTopic = topicText || activeInvestigation?.title || activeSession.title || 'Tema de Estudio';
+    sessionStorage.setItem('dyser_active_expo_topic', finalTopic);
+    if (contextText) {
+      sessionStorage.setItem('dyser_expo_research_context', contextText);
+    }
+    sounds.playChirp();
+    if (onNavigateTo) {
+      onNavigateTo('exposition-study');
+    } else {
+      window.dispatchEvent(new CustomEvent('dyser-navigate', { detail: 'exposition-study' }));
+    }
+    if (onShowToast) {
+      onShowToast({
+        title: '🎙️ Ruta 2: Estudio de Exposición',
+        message: 'Estructurando oratoria por puntos y lámina mental para Nasser AI Studio.',
+        type: 'info',
+      });
+    }
+  };
+
+  // Cronómetro de clase en vivo
+  useEffect(() => {
+    if (isLiveClassRecording) {
+      liveClassTimerRef.current = setInterval(() => {
+        setLiveClassSeconds(s => s + 1);
+      }, 1000);
+    } else {
+      if (liveClassTimerRef.current) clearInterval(liveClassTimerRef.current);
+    }
+    return () => {
+      if (liveClassTimerRef.current) clearInterval(liveClassTimerRef.current);
+    };
+  }, [isLiveClassRecording]);
+
+  const formatLiveClassTime = (secs: number) => {
+    const mins = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${mins.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Flujo 2 Ingesta: Procesar automáticamente grabaciones enviadas desde la Biblioteca local
+  useEffect(() => {
+    const processPendingRecording = async () => {
+      try {
+        const pendingRaw = sessionStorage.getItem('dyser_pending_class_recording');
+        if (pendingRaw) {
+          sessionStorage.removeItem('dyser_pending_class_recording');
+          const pending = JSON.parse(pendingRaw);
+          if (pending && (pending.rawTranscript || pending.title)) {
+            let audioPayload: { audioBase64: string; mimeType: string } | undefined;
+            if (pending.id) {
+              const blob = await getAudioRecord(pending.id);
+              if (blob && blob.size > 0) {
+                try {
+                  const b64 = await blobToBase64(blob);
+                  audioPayload = { audioBase64: b64, mimeType: blob.type || 'audio/webm' };
+                } catch (b64Err) {
+                  console.warn('Error al convertir audio a base64:', b64Err);
+                }
+              }
+            }
+
+            const autoPrompt = `[GRABACIÓN DE CLASE EN VIVO - REGLA DE PROCESAMIENTO OBLIGATORIA: PROHIBIDO RESUMIR]
+
+Materia: "${pending.subject || 'Clase Universitaria'}"
+Tema: "${pending.title || 'Grabación de clase en vivo'}"
+Transcripción íntegra capturada:
+"${pending.rawTranscript}"
+
+Instrucción estricta de procesamiento: Bajo ninguna circunstancia debes resumir el contenido de la grabación de clases en vivo. Tienes la prohibición absoluta de recortar, condensar o sintetizar. Debes respetar de forma íntegra cada palabra transcrita, limitándote exclusivamente a transcribir y ordenar de forma pulcra, extensa y detallada toda la información escuchada punto por punto, estructurada limpiamente con negritas, viñetas y desgloses lógicos rigurosos, manteniendo todo el contexto original sin recortes y citando textualmente las advertencias del docente.`;
+
+            setTimeout(() => {
+              handleSend(autoPrompt, audioPayload);
+            }, 350);
+          }
+        }
+      } catch (e) {
+        console.error('Error procesando grabación transferida desde biblioteca:', e);
+      }
+    };
+    processPendingRecording();
+  }, []);
 
   // 1. Suscripción en tiempo real a Firebase Firestore para multisesión
   useEffect(() => {
@@ -219,6 +492,13 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   const activeSession: ChatSession =
     sessions.find(s => s.id === activeSessionId) || sessions[0] || defaultInitialSession;
 
+  const isInvestigationSession = Boolean(
+    activeInvestigation && (
+      activeSession.id.startsWith('session-inv') ||
+      activeSession.title.startsWith('Investigación:')
+    )
+  );
+
   // Filtrar estrictamente cualquier mensaje de bienvenida legado para garantizar pantalla limpia
   const messages = (activeSession.messages || []).filter(
     m =>
@@ -239,12 +519,12 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
     }
   }, [messages.length, isLoading]);
 
-  // Las herramientas académicas esenciales centralizadas en Nasser IA
+  // Las 4 herramientas académicas esenciales de Nasser IA solicitadas
   const studioTools = [
     {
       id: 'summary',
       title: 'Crear PDFs y Resúmenes con IA',
-      description: 'Genera síntesis formales, flashcards y exporta a PDF',
+      description: 'Genera síntesis formales y exporta a PDF',
       icon: FileText,
       color: 'text-blue-500 dark:text-blue-400',
       bgColor: 'bg-blue-500/10 dark:bg-blue-500/15',
@@ -253,31 +533,20 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
       tab: 'summary' as ActiveTab,
     },
     {
-      id: 'exam',
-      title: 'Simulador y Práctica de Exámenes',
-      description: 'Evaluaciones con cronómetro, corrección y análisis',
-      icon: GraduationCap,
+      id: 'studio',
+      title: 'Láminas Mentales en Studio',
+      description: 'Diseño interactivo de diapositivas',
+      icon: Layers,
       color: 'text-purple-500 dark:text-purple-400',
       bgColor: 'bg-purple-500/10 dark:bg-purple-500/15',
       borderColor: 'hover:border-purple-400 dark:hover:border-purple-700/80',
-      actionPrompt: 'Genera una simulación de examen con cronómetro y rúbrica para el tema: ',
-      tab: 'exam-simulator' as ActiveTab,
-    },
-    {
-      id: 'multimedia',
-      title: 'Practicar Exposiciones & Slides',
-      description: 'Prepara guiones de oratoria, diapositivas y fichas',
-      icon: Palette,
-      color: 'text-[#fe6b00] dark:text-[#fe6b00]',
-      bgColor: 'bg-orange-500/10 dark:bg-orange-500/15',
-      borderColor: 'hover:border-orange-400 dark:hover:border-orange-700/80',
-      actionPrompt: 'Ayúdame a estructurar una exposición universitaria con diapositivas y guion de oratoria para: ',
+      actionPrompt: 'Crea una presentación académica y lámina mental para: ',
       tab: 'multimedia' as ActiveTab,
     },
     {
       id: 'solver',
-      title: 'Solucionador de Problemas STEM',
-      description: 'Demostraciones rigurosas paso a paso',
+      title: 'Solucionador STEM',
+      description: 'Demostraciones paso a paso',
       icon: Calculator,
       color: 'text-emerald-500 dark:text-emerald-400',
       bgColor: 'bg-emerald-500/10 dark:bg-emerald-500/15',
@@ -286,20 +555,9 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
       tab: 'problem-solver' as ActiveTab,
     },
     {
-      id: 'blackboard',
-      title: 'Foto a la Pizarra (OCR)',
-      description: 'Digitaliza fotos y notas manuscritas a LaTeX',
-      icon: Camera,
-      color: 'text-amber-500 dark:text-amber-400',
-      bgColor: 'bg-amber-500/10 dark:bg-amber-500/15',
-      borderColor: 'hover:border-amber-400 dark:hover:border-amber-700/80',
-      actionPrompt: 'Transcribe y estructura formalmente los diagramas y notas de una pizarra para el tema: ',
-      tab: 'blackboard' as ActiveTab,
-    },
-    {
       id: 'recorder',
       title: 'Grabador de Clases en Vivo',
-      description: 'Cátedras de audio convertidas a apuntes limpios',
+      description: 'Cátedra a texto íntegro sin recortes',
       icon: Mic,
       color: 'text-rose-500 dark:text-rose-400',
       bgColor: 'bg-rose-500/10 dark:bg-rose-500/15',
@@ -311,6 +569,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
 
   // Crear una nueva conversación completamente limpia (sin mensajes)
   const handleCreateNewSession = async () => {
+    setActiveInvestigation(null);
     const newSessionId = `session-${Date.now()}`;
     const newSession: ChatSession = {
       id: newSessionId,
@@ -456,14 +715,192 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
     }
   };
 
-  // Enviar mensaje en el chat
-  const handleSend = async (textToSend?: string) => {
+  // Flujo 1: Grabación de clases en vivo directa en el chat
+  // Regla: Cuando el usuario detiene la grabación, procesa, transcribe y envía automáticamente a Nasser AI sin confirmaciones
+  // con la regla estricta de CERO RESÚMENES (entrega íntegra y ordenada punto por punto).
+  const handleToggleLiveClassRecording = async () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (isLiveClassRecording) {
+      // Detener grabación y recolectar audio real
+      sounds.playPop();
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (_) {}
+      }
+
+      // Detener MediaRecorder y recolectar blob
+      let audioPayload: { audioBase64: string; mimeType: string } | undefined;
+      if (liveClassMediaRecorderRef.current && liveClassMediaRecorderRef.current.state !== 'inactive') {
+        try {
+          await new Promise<void>((resolve) => {
+            if (!liveClassMediaRecorderRef.current) return resolve();
+            liveClassMediaRecorderRef.current.onstop = () => resolve();
+            liveClassMediaRecorderRef.current.stop();
+          });
+
+          if (liveClassAudioChunksRef.current.length > 0) {
+            const mimeType = liveClassMediaRecorderRef.current.mimeType || 'audio/webm';
+            const audioBlob = new Blob(liveClassAudioChunksRef.current, { type: mimeType });
+            try {
+              const b64 = await blobToBase64(audioBlob);
+              audioPayload = { audioBase64: b64, mimeType };
+              // Guardar también en IndexedDB local para respaldo del estudiante
+              saveAudioRecord(`rec-chat-${Date.now()}`, audioBlob).catch(() => {});
+            } catch (convErr) {
+              console.warn('Error convirtiendo audio de chat a base64:', convErr);
+            }
+          }
+        } catch (mErr) {
+          console.warn('Error deteniendo mediaRecorder en chat:', mErr);
+        }
+      }
+
+      if (liveClassMediaStreamRef.current) {
+        liveClassMediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        liveClassMediaStreamRef.current = null;
+      }
+
+      setIsLiveClassRecording(false);
+      setIsListening(false);
+      setSpeechFeedback(null);
+
+      // Transcripción capturada palabra por palabra
+      const transcriptCaptured =
+        liveClassTranscriptRef.current.trim() ||
+        input.trim() ||
+        `Audio capturado en vivo durante la cátedra de ${selectedSubject}. Registro completo de la clase para transcripción y ordenamiento riguroso.`;
+
+      const prompt = `[GRABACIÓN DE CLASE EN VIVO - REGLA DE PROCESAMIENTO OBLIGATORIA: PROHIBIDO RESUMIR]
+
+Materia / Cátedra: ${selectedSubject}
+Tiempo de clase grabado: ${formatLiveClassTime(liveClassSeconds)}
+Transcripción íntegra capturada en el aula:
+"${transcriptCaptured}"
+
+Instrucción estricta para Nasser AI:
+Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clase en vivo. Tienes prohibición absoluta de recortar, condensar o sintetizar. Debes respetar de forma íntegra cada palabra transcrita, limitándote exclusivamente a transcribir y ordenar de forma pulcra, extensa y detallada toda la información escuchada punto por punto, estructurada limpiamente con negritas, viñetas y desgloses lógicos rigurosos, manteniendo todo el contexto original sin recortes y citando textualmente las advertencias del docente.`;
+
+      setInput('');
+      liveClassTranscriptRef.current = '';
+      setLiveClassSeconds(0);
+
+      // Envío automático e inmediato a Nasser AI sin confirmaciones
+      handleSend(prompt, audioPayload);
+      return;
+    }
+
+    // Iniciar grabación de clase en vivo con micrófono real
+    sounds.playChirp();
+    setIsLiveClassRecording(true);
+    setLiveClassSeconds(0);
+    liveClassTranscriptRef.current = '';
+    liveClassAudioChunksRef.current = [];
+
+    // Solicitar stream de audio real del micrófono
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        liveClassMediaStreamRef.current = stream;
+
+        let mimeType = 'audio/webm';
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        }
+
+        const mediaRecorder = new MediaRecorder(stream, { mimeType });
+        liveClassMediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            liveClassAudioChunksRef.current.push(e.data);
+          }
+        };
+
+        mediaRecorder.start(1000);
+      }
+    } catch (micErr) {
+      console.warn('[Live Class Recording] Micrófono nativo no accesible:', micErr);
+    }
+
+    if (!SpeechRecognition) {
+      setSpeechFeedback('Grabando clase en vivo en el aula...');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      recognition.lang = 'es-ES';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setSpeechFeedback('Grabando clase en vivo en el aula...');
+      };
+
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        if (transcript) {
+          liveClassTranscriptRef.current = (liveClassTranscriptRef.current + ' ' + transcript).trim();
+          setSpeechFeedback(`Grabando: "${transcript.slice(-35)}..."`);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('[Live Class Recording] Recognition notice:', event.error);
+        if (event.error === 'not-allowed') {
+          setSpeechFeedback('Permiso de micrófono requerido');
+        }
+      };
+
+      recognition.onend = () => {
+        // En grabación de clase en vivo, reiniciar si no fue detenida por el usuario
+        if (isLiveClassRecording) {
+          try {
+            recognition.start();
+          } catch (_) {}
+        }
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.warn('[Live Class Recording] Fallo inicio reconocimiento:', err);
+    }
+  };
+
+  // Enviar mensaje en el chat con soporte de audio multimodal
+  const handleSend = async (
+    textToSend?: string,
+    audioPayload?: { audioBase64: string; mimeType: string }
+  ) => {
     // Si estaba grabando, detener el micrófono
     if (isListening && recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch (_) {}
       setIsListening(false);
+    }
+    if (isLiveClassRecording) {
+      setIsLiveClassRecording(false);
+      if (liveClassTimerRef.current) clearInterval(liveClassTimerRef.current);
+      if (liveClassMediaStreamRef.current) {
+        liveClassMediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        liveClassMediaStreamRef.current = null;
+      }
     }
 
     const text = textToSend || input;
@@ -492,8 +929,8 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
       messages: updatedMessagesWithUser,
     };
 
-    setSessions(prev =>
-      prev.map(s => (s.id === activeSession.id ? sessionWithUser : s))
+    setSessions((prev) =>
+      prev.map((s) => (s.id === activeSession.id ? sessionWithUser : s))
     );
     setInput('');
     setIsLoading(true);
@@ -503,7 +940,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
     await saveChatSessionToFirestore(sessionWithUser);
 
     try {
-      const historyPayload = updatedMessagesWithUser.map(m => ({
+      const historyPayload = updatedMessagesWithUser.map((m) => ({
         role: (m.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
         text: m.text,
       }));
@@ -511,7 +948,8 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
       const liveReply = await sendLiveNasserQuery(
         text.trim(),
         historyPayload,
-        selectedSubject !== 'General' ? selectedSubject : undefined
+        selectedSubject !== 'General' ? selectedSubject : undefined,
+        audioPayload
       );
 
       const aiMsg: ChatMessage = {
@@ -645,7 +1083,7 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   };
 
   return (
-    <div className="w-full h-full min-h-[calc(100vh-140px)] flex flex-col md:flex-row relative animate-in fade-in duration-300">
+    <div className="w-full h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-8.5rem)] max-h-[920px] flex flex-col md:flex-row relative animate-in fade-in duration-300 overflow-hidden bg-white dark:bg-[#070b14] rounded-3xl border border-gray-200/80 dark:border-gray-800 shadow-xs">
       
       {/* ------------------------------------------------------------- */}
       {/* PANEL LATERAL DE HISTORIAL MULTISESIÓN (FIREBASE FIRESTORE) */}
@@ -836,55 +1274,66 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
         {/* SIN MENSAJES -> SALUDO DINÁMICO + HERRAMIENTAS DE ESTUDIO */}
         {/* CON MENSAJES -> HILO FLUIDO DE INVESTIGACIÓN CON NASSER AI */}
         {/* ------------------------------------------------------------- */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 custom-scrollbar flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 custom-scrollbar flex flex-col">
           {messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center max-w-2xl w-full mx-auto px-2 sm:px-4 py-6 my-auto animate-in fade-in duration-300">
-              
-              {/* Saludo dinámico con frases aleatorias al ingresar a Nasser IA */}
-              <div className="text-center mb-6 max-w-md">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-[#00236f] dark:text-[#90a8ff] text-xs font-bold mb-2.5 border border-indigo-200/60 dark:border-indigo-800/60">
-                  <Sparkles className="w-3.5 h-3.5 text-[#fe6b00]" />
-                  <span>Nasser IA • Asesor Académico</span>
+            <div className="flex-1 flex flex-col justify-center items-center max-w-2xl w-full mx-auto px-2 py-3 sm:py-6 my-auto animate-in fade-in duration-300">
+              {isInvestigationSession && activeInvestigation ? (
+                /* ESTADO LIMPIO AL PRESIONAR 'INVESTIGAR': Sin bloques largos, sin los 4 botones estorbosos, pregunta enfocada en el tema */
+                <div className="text-center max-w-lg w-full px-4 py-8">
+                  <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-orange-50 dark:bg-orange-950/60 text-[#fe6b00] text-xs font-bold mb-4 border border-orange-200/60 dark:border-orange-800/60 shadow-2xs">
+                    <Sparkles className="w-3.5 h-3.5 text-[#fe6b00]" />
+                    <span>Investigación • {activeInvestigation.subject || 'Cátedra'}</span>
+                  </div>
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-gray-900 dark:text-white tracking-tight leading-snug">
+                    {formatTopicQuestion(activeInvestigation.title)}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-3 max-w-md mx-auto leading-relaxed">
+                    Escribe tu consulta o enfoque específico en la barra inferior para comenzar sin saturar la pantalla.
+                  </p>
                 </div>
-                <h2 className="text-2xl sm:text-3xl font-black text-gray-900 dark:text-white tracking-tight">
-                  {greeting}
-                </h2>
-                <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1.5">
-                  Elige una herramienta de estudio o escribe cualquier pregunta abajo.
-                </p>
-              </div>
+              ) : (
+                /* Saludo dinámico estándar y accesos rápidos */
+                <>
+                  <div className="text-center mb-3 sm:mb-5 max-w-md">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-[#00236f] dark:text-[#90a8ff] text-xs font-bold mb-2 border border-indigo-200/60 dark:border-indigo-800/60">
+                      <Sparkles className="w-3.5 h-3.5 text-[#fe6b00]" />
+                      <span>Nasser IA • Asesor Académico</span>
+                    </div>
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-gray-900 dark:text-white tracking-tight leading-tight">
+                      {greeting}
+                    </h2>
+                    <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
+                      Escribe tu consulta abajo o toca un acceso rápido directo:
+                    </p>
+                  </div>
 
-              {/* Cuadrícula de 6 herramientas académicas centradas */}
-              <div className="grid grid-cols-2 gap-3 sm:gap-4 w-full">
-                {studioTools.map((tool) => {
-                  const Icon = tool.icon;
-                  return (
-                    <button
-                      key={tool.id}
-                      onClick={() => handleToolClick(tool)}
-                      className={`
-                        group p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#111728] border border-gray-200/80 dark:border-gray-800/80
-                        ${tool.borderColor} shadow-xs hover:shadow-md transition-all duration-200 text-left flex flex-col justify-between
-                        hover:-translate-y-0.5 active:scale-98 min-h-[115px] sm:min-h-[130px]
-                      `}
-                    >
-                      <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl ${tool.bgColor} ${tool.color} flex items-center justify-center shrink-0 mb-3`}>
-                        <Icon className="w-5 h-5" />
-                      </div>
-
-                      <div>
-                        <h3 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white group-hover:text-[#00236f] dark:group-hover:text-indigo-400 transition leading-snug">
-                          {tool.title}
-                        </h3>
-                        <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 sm:mt-1 leading-tight line-clamp-2">
-                          {tool.description}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
+                  {/* Accesos Clave Compactos Estilo Gemini (Cero Scroll Requerido) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-2.5 w-full max-w-xl">
+                    {studioTools.map((tool) => {
+                      const Icon = tool.icon;
+                      return (
+                        <button
+                          key={tool.id}
+                          onClick={() => handleToolClick(tool)}
+                          className={`group p-2.5 sm:p-3 rounded-2xl bg-gray-50/80 dark:bg-[#111728] border border-gray-200/80 dark:border-gray-800 ${tool.borderColor} hover:bg-white dark:hover:bg-[#151e33] hover:shadow-xs transition-all duration-150 text-left flex items-center gap-2.5 active:scale-98 cursor-pointer`}
+                        >
+                          <div className={`w-8 h-8 rounded-xl ${tool.bgColor} ${tool.color} flex items-center justify-center shrink-0`}>
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-xs font-bold text-gray-900 dark:text-white group-hover:text-[#00236f] dark:group-hover:text-indigo-400 transition truncate">
+                              {tool.title}
+                            </h3>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                              {tool.description}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             // CONVERSACIÓN FLUIDA: RESPUESTAS DE LA IA RENDERIZADAS COMO TEXTO (ESTILO GEMINI)
@@ -1045,15 +1494,78 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                 </div>
               )}
 
+              {/* RUTAS CLARAS DE FINALIZACIÓN DE INVESTIGACIÓN (EMBUDO ACADÉMICO) */}
+              {messages.length >= 2 && (
+                <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-blue-50/90 via-purple-50/60 to-orange-50/80 dark:from-blue-950/40 dark:via-purple-950/30 dark:to-orange-950/40 border border-blue-200/80 dark:border-blue-800/80 shadow-xs space-y-3 animate-in fade-in duration-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#fe6b00] animate-pulse" />
+                      <h4 className="text-xs font-black uppercase tracking-wider text-[#00236f] dark:text-indigo-300">
+                        Embudo de Estudio • Selecciona tu Ruta de Aprendizaje
+                      </h4>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 shadow-2xs">
+                      Continuación Automática
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-600 dark:text-gray-300">
+                    Aprovecha el conocimiento investigado sobre <strong className="text-gray-900 dark:text-white">{activeInvestigation?.title || activeSession.title}</strong> para consolidar tu aprendizaje:
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {/* Ruta 1: Practicar Examen */}
+                    <button
+                      id="btn-funnel-ruta-1-examen"
+                      onClick={() => handleGoToExamPractice(activeInvestigation?.title || activeSession.title, messages.map(m => m.text).join('\n'))}
+                      className="p-3.5 rounded-2xl bg-white dark:bg-[#111728] border-2 border-purple-200 dark:border-purple-800 hover:border-purple-500 hover:shadow-md transition text-left group flex items-start gap-3 cursor-pointer"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                        <GraduationCap className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black text-gray-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-400 flex items-center gap-1">
+                          <span>Ruta 1: Practicar Examen</span>
+                          <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition" />
+                        </div>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">
+                          Cuestionario interactivo estilo Duolingo con corrección en vivo ("Así no es mi examen").
+                        </p>
+                      </div>
+                    </button>
+
+                    {/* Ruta 2: Estudiar Exposición */}
+                    <button
+                      id="btn-funnel-ruta-2-exposicion"
+                      onClick={() => handleGoToExpositionStudy(activeInvestigation?.title || activeSession.title, messages.map(m => m.text).join('\n'))}
+                      className="p-3.5 rounded-2xl bg-white dark:bg-[#111728] border-2 border-orange-200 dark:border-orange-800 hover:border-[#fe6b00] hover:shadow-md transition text-left group flex items-start gap-3 cursor-pointer"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-950/60 text-[#fe6b00] flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                        <Layers className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black text-gray-900 dark:text-white group-hover:text-[#fe6b00] flex items-center gap-1">
+                          <span>Ruta 2: Estudiar Exposición</span>
+                          <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition" />
+                        </div>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">
+                          Estructura por puntos, oratoria y lámina mental automática en Nasser AI Studio.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div ref={messagesEndRef} />
             </div>
           )}
         </div>
 
         {/* ------------------------------------------------------------- */}
-        {/* BARRA DE ENTRADA DE TEXTO FLOTANTE ABAJO CON MICRÓFONO */}
+        {/* BARRA DE ENTRADA DE TEXTO FIJA ABAJO ESTILO GEMINI */}
         {/* ------------------------------------------------------------- */}
-        <div className="sticky bottom-0 w-full px-4 sm:px-6 pb-4 pt-2 bg-gradient-to-t from-white via-white/95 to-transparent dark:from-[#090d16] dark:via-[#090d16]/95 dark:to-transparent z-20">
+        <div className="shrink-0 w-full px-3 sm:px-6 py-2.5 sm:py-3 bg-white/95 dark:bg-[#070b14]/95 backdrop-blur-md border-t border-gray-100 dark:border-gray-800/80 z-20">
           <form
             onSubmit={e => {
               e.preventDefault();
@@ -1061,39 +1573,35 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
             }}
             className="max-w-3xl w-full mx-auto space-y-2"
           >
-            {/* Píldoras de Disciplina Académica para enfocar la investigación */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
-              <span className="text-[11px] font-bold text-gray-400 dark:text-gray-500 shrink-0 mr-1">
-                Disciplina:
-              </span>
-              {ACADEMIC_DISCIPLINES.map(disc => {
-                const isSelected = selectedSubject === disc.id;
-                const Icon = disc.icon;
-                return (
-                  <button
-                    key={disc.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedSubject(disc.id);
-                      if (disc.prompt && !input.trim()) {
-                        setInput(disc.prompt);
-                      }
-                    }}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1.5 shrink-0 transition active:scale-95 ${
-                      isSelected
-                        ? 'bg-[#00236f] text-white shadow-xs dark:bg-indigo-600'
-                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    <Icon className="w-3 h-3" />
-                    <span>{disc.name}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {/* Banner interactivo de Grabación de clases en vivo en curso */}
+            {isLiveClassRecording && (
+              <div className="flex items-center justify-between gap-2 sm:gap-3 px-3.5 py-2.5 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-700 dark:text-rose-300 shadow-sm animate-pulse">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-rose-500 animate-pulse shrink-0" />
+                  <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider">
+                    Grabando clase en vivo:
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-black text-rose-600 dark:text-rose-400">
+                    {formatLiveClassTime(liveClassSeconds)}
+                  </span>
+                </div>
+                <span className="text-[11px] text-rose-800 dark:text-rose-200 hidden md:inline">
+                  {speechFeedback || 'Escuchando cátedra... Cero resúmenes garantizado'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleLiveClassRecording}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs active:scale-95 transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  title="Detener y enviar automáticamente a Nasser AI sin confirmaciones"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Detener y Enviar a Nasser AI</span>
+                </button>
+              </div>
+            )}
 
-            {/* Feedback de voz cuando está escuchando */}
-            {isListening && (
+            {/* Feedback de voz estándar si no es clase en vivo */}
+            {!isLiveClassRecording && isListening && (
               <div className="flex items-center gap-2 mb-1 px-3 py-1 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 text-xs font-semibold w-fit mx-auto border border-rose-500/30 animate-pulse shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                 <span>{speechFeedback || 'Escuchando tu voz... Habla ahora'}</span>
@@ -1106,27 +1614,39 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 placeholder={
-                  selectedSubject === 'General'
-                    ? 'Escribe tu consulta o tema a investigar a fondo...'
+                  isLiveClassRecording
+                    ? 'Grabando clase en vivo... Al terminar se enviará automáticamente a Nasser AI'
+                    : isInvestigationSession && activeInvestigation
+                    ? `Pregunta lo que quieras saber sobre ${activeInvestigation.title}...`
+                    : selectedSubject === 'General'
+                    ? 'Escribe tu consulta o inicia una grabación de clase en vivo...'
                     : `Investigar sobre ${selectedSubject}...`
                 }
                 className="w-full py-3 pl-4 pr-24 text-xs sm:text-sm text-gray-900 dark:text-white bg-transparent focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
               />
 
-              {/* Botones de acción agrupados a la derecha: Micrófono + Enviar */}
+              {/* Botones de acción agrupados a la derecha: Grabación de clases en vivo + Enviar */}
               <div className="absolute right-2 flex items-center gap-1.5">
-                {/* Botón de Micrófono Funcional con Web Speech API */}
+                {/* Botón de Grabación de clases en vivo (Flujo 1) */}
                 <button
                   type="button"
-                  onClick={handleToggleVoice}
+                  onClick={handleToggleLiveClassRecording}
                   className={`p-2.5 rounded-2xl transition active:scale-95 flex items-center justify-center shrink-0 ${
-                    isListening
+                    isLiveClassRecording
                       ? 'bg-rose-600 text-white shadow-md shadow-rose-500/30 animate-pulse ring-2 ring-rose-500/50'
                       : 'text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40'
                   }`}
-                  title={isListening ? 'Detener reconocimiento de voz' : 'Hablar por micrófono'}
+                  title={
+                    isLiveClassRecording
+                      ? 'Detener grabación de clase en vivo y enviar automáticamente a Nasser AI'
+                      : 'Iniciar Grabación de clase en vivo en el aula'
+                  }
                 >
-                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  {isLiveClassRecording ? (
+                    <Square className="w-4 h-4 fill-current text-white" />
+                  ) : (
+                    <Mic className="w-4 h-4" />
+                  )}
                 </button>
 
                 {/* Botón de Enviar */}

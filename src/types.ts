@@ -11,6 +11,7 @@ export type ActiveTab =
   | 'study-rooms'
   | 'community'
   | 'exam-simulator'
+  | 'exposition-study'
   | 'chameleon-sanctuary'
   | 'streak'
   | 'chameleon-road';
@@ -65,6 +66,7 @@ export interface StudentProfile {
 
 export type TaskPriority = 'alta' | 'media' | 'baja';
 export type TaskStatus = 'pendiente' | 'en_progreso' | 'completada';
+export type ActivityType = 'tarea' | 'examen' | 'exposicion';
 
 export interface AcademicTask {
   id: string;
@@ -77,6 +79,8 @@ export interface AcademicTask {
   estimatedMinutes: number;
   description: string;
   isOverdue?: boolean;
+  activityType?: ActivityType;
+  completedAt?: number;
 }
 
 export interface Flashcard {
@@ -109,6 +113,18 @@ export interface ClassRecordingResult {
   examQuestionsGenerated: string[];
 }
 
+export interface LiveClassRecordingItem {
+  id: string;
+  title: string;
+  subject: string;
+  timestamp: number;
+  durationSeconds: number;
+  durationFormatted: string;
+  rawTranscript: string;
+  status: 'guardada_local' | 'procesada_en_nasser';
+  audioWaveform?: number[];
+}
+
 export interface ProblemSolverStep {
   stepNumber: number;
   title: string;
@@ -125,11 +141,15 @@ export interface ProblemSolverResult {
   pitfallsToAvoid: string[];
 }
 
+export type QuestionType = 'multiple_choice' | 'fill_blank' | 'true_false';
+
 export interface ExamQuestion {
   id: string;
+  type?: QuestionType;
   questionText: string;
   options: string[];
   correctOptionIndex: number;
+  correctAnswer?: string;
   explanation: string;
 }
 
@@ -140,6 +160,26 @@ export interface ExamSimulation {
   timeLimitMinutes: number;
   passingGrade: number;
   questions: ExamQuestion[];
+}
+
+export interface ExpositionPoint {
+  id: string;
+  number: number;
+  title: string;
+  keyIdea: string;
+  speechScript: string;
+  example: string;
+  warningNote?: string;
+}
+
+export interface ExpositionStudy {
+  id: string;
+  topic: string;
+  subject?: string;
+  numPoints: number;
+  summaryIdea?: string;
+  points: ExpositionPoint[];
+  conclusionScript?: string;
 }
 
 export interface SlideItem {

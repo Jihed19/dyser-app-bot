@@ -16,6 +16,7 @@ import { ClassRecorderView } from './components/views/ClassRecorderView';
 import { ProblemSolverView } from './components/views/ProblemSolverView';
 import { StudyRoomsView } from './components/views/StudyRoomsView';
 import { ExamSimulatorView } from './components/views/ExamSimulatorView';
+import { ExpositionStudyView } from './components/views/ExpositionStudyView';
 import { CommunityView } from './components/views/CommunityView';
 import { OnboardingView } from './components/views/OnboardingView';
 import { initialStudentProfile, initialAcademicTasks } from './data/mockData';
@@ -25,6 +26,7 @@ import { sounds } from './services/soundEffects';
 import {
   subscribeToAcademicTasks,
   saveAcademicTaskToFirestore,
+  deleteAcademicTaskFromFirestore,
   subscribeToStudentProfile,
 } from './services/firebase';
 
@@ -138,7 +140,33 @@ const AppContent: React.FC = () => {
     if (overdue.length > 0) {
       notifyDeviceOverdueTasks(overdue);
     }
+
+    const handleDyserNav = (e: Event) => {
+      const customEvent = e as CustomEvent<ActiveTab>;
+      if (customEvent.detail) {
+        setActiveTab(customEvent.detail);
+      }
+    };
+    window.addEventListener('dyser-navigate', handleDyserNav);
+    return () => window.removeEventListener('dyser-navigate', handleDyserNav);
   }, []);
+
+  // Ciclo de Vida de Tareas Completadas (Regla de 7 Días):
+  // Cada tarea completada cumple su propio ciclo individual de 7 días desde su finalización y se elimina automáticamente.
+  useEffect(() => {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const expiredTasks = tasks.filter(
+      (t) => t.status === 'completada' && t.completedAt && now - t.completedAt > SEVEN_DAYS_MS
+    );
+
+    if (expiredTasks.length > 0) {
+      expiredTasks.forEach((t) => {
+        deleteAcademicTaskFromFirestore(t.id);
+      });
+      setTasks((prev) => prev.filter((t) => !expiredTasks.some((exp) => exp.id === t.id)));
+    }
+  }, [tasks]);
 
   const pendingTasksCount = tasks.filter((t) => t.status !== 'completada').length;
   const hasOverdueTasks = tasks.some((t) => t.isOverdue && t.status !== 'completada');
@@ -151,6 +179,7 @@ const AppContent: React.FC = () => {
           const updatedTask: AcademicTask = {
             ...t,
             status: nextStatus,
+            completedAt: nextStatus === 'completada' ? Date.now() : undefined,
             isOverdue: nextStatus === 'completada' ? false : t.isOverdue,
           };
           saveAcademicTaskToFirestore(updatedTask);
@@ -207,6 +236,11 @@ const AppContent: React.FC = () => {
             tasks={tasks}
             onToggleTask={handleToggleTask}
             onAddTask={handleAddTask}
+            onInvestigateTask={(task) => {
+              sessionStorage.setItem('dyser_investigate_task', JSON.stringify(task));
+              setActiveTab('nasser-ia');
+            }}
+            onNavigateTo={(tab) => setActiveTab(tab)}
           />
         );
       case 'nasser-ia':
@@ -221,17 +255,29 @@ const AppContent: React.FC = () => {
       case 'summary':
         return <SummaryView />;
       case 'multimedia':
-        return <MultimediaCreatorView />;
+        return <MultimediaCreatorView onShowToast={addToast} />;
       case 'blackboard':
         return <BlackboardView />;
       case 'class-recorder':
-        return <ClassRecorderView />;
+        return <ClassRecorderView onNavigateTo={(tab) => setActiveTab(tab)} />;
       case 'problem-solver':
         return <ProblemSolverView />;
       case 'study-rooms':
         return <StudyRoomsView />;
       case 'exam-simulator':
-        return <ExamSimulatorView />;
+        return (
+          <ExamSimulatorView
+            onNavigateTo={(tab) => setActiveTab(tab)}
+            onShowToast={addToast}
+          />
+        );
+      case 'exposition-study':
+        return (
+          <ExpositionStudyView
+            onNavigateTo={(tab) => setActiveTab(tab)}
+            onShowToast={addToast}
+          />
+        );
       case 'community':
         return <CommunityView />;
       case 'streak':

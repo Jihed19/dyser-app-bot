@@ -15,6 +15,7 @@ import {
   Moon,
   Flame,
   MessageSquareQuote,
+  Layers,
 } from 'lucide-react';
 import { ActiveTab, StudentProfile } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -85,6 +86,18 @@ export const Drawer: React.FC<DrawerProps> = ({
       ],
     },
     {
+      title: 'Guías',
+      items: [
+        {
+          id: 'multimedia' as ActiveTab,
+          label: 'Nasser AI Studio',
+          icon: Palette,
+          badge: 'Estudio Pro',
+          badgeColor: 'bg-gradient-to-r from-[#00236f] to-[#fe6b00] text-white',
+        },
+      ],
+    },
+    {
       title: 'Estudio & Creación',
       items: [
         {
@@ -94,7 +107,7 @@ export const Drawer: React.FC<DrawerProps> = ({
         },
         {
           id: 'class-recorder' as ActiveTab,
-          label: 'Grabador de Clases',
+          label: 'Grabación de clases en vivo',
           icon: Mic,
         },
         {
@@ -103,14 +116,16 @@ export const Drawer: React.FC<DrawerProps> = ({
           icon: GraduationCap,
         },
         {
+          id: 'exposition-study' as ActiveTab,
+          label: 'Estudio de Exposición',
+          icon: Layers,
+          badge: 'Oratoria',
+          badgeColor: 'bg-orange-100 text-[#fe6b00] dark:bg-orange-950 dark:text-orange-300',
+        },
+        {
           id: 'blackboard' as ActiveTab,
           label: 'Digitalizar Pizarra',
           icon: Camera,
-        },
-        {
-          id: 'multimedia' as ActiveTab,
-          label: 'Creador de Diapositivas',
-          icon: Palette,
         },
       ],
     },

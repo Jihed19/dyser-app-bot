@@ -29,10 +29,15 @@ export interface InvestigacionCapturada {
 /**
  * Función principal para conectar la PWA de dyser con Nasser AI
  * Realiza la llamada al endpoint del motor Nasser AI optimizado con streaming y fallback
+ * Admite audio real grabado desde el micrófono para grabaciones de clases en vivo.
  */
-export async function consultarNasserAI(preguntaDelUsuario: string, materia: string = 'Ciencias y Humanidades'): Promise<string> {
+export async function consultarNasserAI(
+  preguntaDelUsuario: string,
+  materia: string = 'Ciencias y Humanidades',
+  audioPayload?: { audioBase64: string; mimeType: string }
+): Promise<string> {
   const queryLimpia = preguntaDelUsuario.trim();
-  if (!queryLimpia) return '';
+  if (!queryLimpia && !audioPayload) return '';
 
   try {
     const response = await fetch('/api/ai/nasser-chat', {
@@ -44,6 +49,8 @@ export async function consultarNasserAI(preguntaDelUsuario: string, materia: str
         preguntaDelUsuario: queryLimpia,
         message: queryLimpia,
         topic: materia,
+        audioBase64: audioPayload?.audioBase64,
+        mimeType: audioPayload?.mimeType,
       }),
     });
 
@@ -65,14 +72,15 @@ export async function consultarNasserAI(preguntaDelUsuario: string, materia: str
 }
 
 /**
- * Consulta interactiva con historial y contexto de disciplina para la PWA
+ * Consulta interactiva con historial, contexto de disciplina y audio opcional para la PWA
  */
 export async function sendLiveNasserQuery(
   message: string,
   history: ChatHistoryEntry[] = [],
-  subjectContext: string = 'Ciencias y Humanidades'
+  subjectContext: string = 'Ciencias y Humanidades',
+  audioPayload?: { audioBase64: string; mimeType: string }
 ): Promise<string> {
-  return consultarNasserAI(message, subjectContext);
+  return consultarNasserAI(message, subjectContext, audioPayload);
 }
 
 /**

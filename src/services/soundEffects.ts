@@ -237,6 +237,29 @@ class SoundEffectsService {
     } catch {}
   }
 
+  public playFanfare() {
+    this.playDuolingoFanfare();
+  }
+
+  public playError() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(260, now);
+      osc.frequency.exponentialRampToValueAtTime(180, now + 0.18);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.22);
+    } catch {}
+  }
+
   // 8. Campana Zen / Cuenco Tibetano para Modo Focus y Pomodoro
   public playFocusBell() {
     const ctx = this.getContext();

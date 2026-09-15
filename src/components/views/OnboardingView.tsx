@@ -57,16 +57,16 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
     },
     {
       id: 'recorder',
-      title: 'Grabador de Clases en Vivo',
+      title: 'Grabación de clases en vivo',
       subtitle: 'Nunca más te perderás lo que dijo el docente',
       description:
-        'Escucha la clase del profesor en segundo plano, detecta frases textuales de alerta ("¡esto entra al examen!") y estructura los apuntes por bloques temáticos.',
+        'Captura la clase en vivo, transcribe de forma íntegra sin resúmenes, detecta frases textuales de alerta ("¡esto entra al examen!") y estructura los apuntes punto por punto.',
       icon: Mic,
       color: 'bg-red-500',
-      badge: 'Audio Transcription Live',
-      metric: 'Detección automática de preguntas de examen',
+      badge: 'Transcripción Íntegra en Vivo',
+      metric: 'Detección de alertas de examen y orden lógico',
       actionTab: 'class-recorder' as ActiveTab,
-      actionLabel: 'Abrir Grabador',
+      actionLabel: 'Abrir Grabación de clases en vivo',
     },
     {
       id: 'exam',
