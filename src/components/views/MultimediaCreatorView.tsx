@@ -6,6 +6,7 @@ import { StudioGalleryModal } from '../studio/StudioGalleryModal';
 import { StudioDocument, StudioFormat, StudioMode } from '../studio/StudioTypes';
 import { createDefaultDocument } from '../studio/studioInitialData';
 import { saveToInternalGallery, executeExport } from '../../utils/studioExport';
+import { trackGoalAction } from '../../services/academicGoals';
 
 interface MultimediaCreatorViewProps {
   initialTopic?: string;
@@ -29,10 +30,11 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
   const [history, setHistory] = useState<StudioDocument[]>([currentDoc]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
-  // 4. Modal de Galería Interna
+  // 4. Modal de Galería Interna y Estado del Panel Superior
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isTopBarCollapsed, setIsTopBarCollapsed] = useState(false);
 
   // Toast interno de respaldo si no viene por props
   const [localToast, setLocalToast] = useState<{
@@ -155,9 +157,12 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
     setIsSaving(true);
     try {
       saveToInternalGallery(currentDoc);
+      trackGoalAction('multimedia');
+      // Abrir automáticamente la ventana de la galería para verificar el archivo guardado
+      setIsGalleryOpen(true);
       showToast({
         title: '¡Guardado con éxito! 🎉',
-        message: 'Tu proyecto se almacenó en la galería interna de Nasser AI Studio.',
+        message: 'Tu proyecto se almacenó y está visible en tu galería de creaciones.',
         type: 'success',
       });
     } catch (e: any) {
@@ -184,6 +189,9 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
       const canvasId =
         currentMode === 'manual' ? 'canva-main-canvas' : 'studio-live-preview-canvas';
       const result = await executeExport(currentDoc, canvasId);
+      if (result.success) {
+        trackGoalAction('multimedia');
+      }
       showToast({
         title: result.success ? 'Exportación completada 📥' : 'Aviso',
         message: result.message,
@@ -201,7 +209,7 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
   };
 
   return (
-    <div className="w-full flex flex-col space-y-4 font-sans select-none">
+    <div className={`w-full flex flex-col ${isTopBarCollapsed ? 'space-y-1.5' : 'space-y-3 sm:space-y-4'} font-sans select-none transition-all duration-300`}>
       {/* 1. BARRA SUPERIOR CON SELECTORES Y ACCIONES */}
       <StudioTopBar
         currentFormat={currentFormat}
@@ -219,6 +227,8 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
         onRedo={handleRedo}
         isSaving={isSaving}
         isExporting={isExporting}
+        isCollapsed={isTopBarCollapsed}
+        onToggleCollapse={() => setIsTopBarCollapsed((prev) => !prev)}
       />
 
       {/* 2. ÁREA DE TRABAJO PRINCIPAL SEGÚN EL MODO SELECCIONADO */}
@@ -229,12 +239,14 @@ export const MultimediaCreatorView: React.FC<MultimediaCreatorViewProps> = ({
             onUpdateDocument={handleUpdateDocument}
             onSwitchToManual={() => handleSelectMode('manual')}
             onShowToast={showToast}
+            isTopBarCollapsed={isTopBarCollapsed}
           />
         ) : (
           <StudioManualMode
             document={currentDoc}
             onUpdateDocument={handleUpdateDocument}
             onShowToast={showToast}
+            isTopBarCollapsed={isTopBarCollapsed}
           />
         )}
       </div>

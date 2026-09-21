@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { SummaryResult } from '../types';
+import { saveUserPdf } from '../services/userVaultService';
 
 /**
  * Sanitiza caracteres especiales para asegurar compatibilidad total con fuentes estándar de jsPDF.
@@ -283,5 +284,22 @@ export function exportSummaryToPdf(
     .slice(0, 28)
     .replace(/_+/g, '_');
 
-  doc.save(`Resumen_dyser_${safeFilename || 'academico'}_${Date.now().toString().slice(-4)}.pdf`);
+  const finalFileName = `Resumen_dyser_${safeFilename || 'academico'}_${Date.now().toString().slice(-4)}.pdf`;
+
+  // Resguardar una copia íntegra en el Almacén Local del Usuario (IndexedDB)
+  try {
+    const pdfDataUri = doc.output('datauristring');
+    saveUserPdf({
+      id: `pdf-summary-${Date.now()}`,
+      name: finalFileName,
+      size: pdfDataUri.length,
+      dataUrl: pdfDataUri,
+      textContent: summary.executiveSummary,
+      subject: topicTitle,
+      createdAt: Date.now(),
+      source: 'summary',
+    }).catch(() => {});
+  } catch (_) {}
+
+  doc.save(finalFileName);
 }

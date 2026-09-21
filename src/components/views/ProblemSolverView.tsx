@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { ProblemSolverResult } from '../../types';
 import { sounds } from '../../services/soundEffects';
+import { trackGoalAction } from '../../services/academicGoals';
 
 export const ProblemSolverView: React.FC = () => {
   const [problemText, setProblemText] = useState(
@@ -52,6 +53,7 @@ export const ProblemSolverView: React.FC = () => {
       });
       const data = await res.json();
       setResult(data);
+      trackGoalAction('problem-solver');
       sounds.playSuccess();
     } catch (e) {
       // Solución clara de respaldo

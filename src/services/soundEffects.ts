@@ -38,7 +38,7 @@ class SoundEffectsService {
     return this.isMuted;
   }
 
-  // 1. Pop suave al acariciar o interactuar con el camaleón
+  // 1. Pop suave táctil interactivo
   public playPop() {
     const ctx = this.getContext();
     if (!ctx) return;
@@ -64,7 +64,7 @@ class SoundEffectsService {
     }
   }
 
-  // 2. Chirrido adorable del camaleón
+  // 2. Tono de notificación ágil
   public playChirp() {
     const ctx = this.getContext();
     if (!ctx) return;
@@ -241,6 +241,47 @@ class SoundEffectsService {
     this.playDuolingoFanfare();
   }
 
+  // Toque sutil táctil / click para botones y tarjetas
+  public playTap() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.04);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.06);
+    } catch {}
+  }
+
+  // Chime agradable para transiciones exitosas
+  public playChime() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      [659.25, 880, 1046.5].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.07);
+        gain.gain.setValueAtTime(0.1, now + idx * 0.07);
+        gain.gain.exponentialRampToValueAtTime(0.005, now + idx * 0.07 + 0.25);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + idx * 0.07);
+        osc.stop(now + idx * 0.07 + 0.28);
+      });
+    } catch {}
+  }
+
   public playError() {
     const ctx = this.getContext();
     if (!ctx) return;
@@ -316,7 +357,7 @@ class SoundEffectsService {
     } catch {}
   }
 
-  // 10. Disparo de Lengua Retráctil del Camaleón (Whip / Tongue Snap)
+  // 10. Sonido de captura / foco instantáneo
   public playTongueSnap() {
     const ctx = this.getContext();
     if (!ctx) return;

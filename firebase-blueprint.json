@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "Perfil académico individual de cada estudiante",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "UID de Firebase Auth del usuario" },
+        "name": { "type": "string", "description": "Nombre completo del estudiante" },
+        "avatar": { "type": "string", "description": "URL del avatar del estudiante" },
+        "program": { "type": "string", "description": "Carrera o programa académico" },
+        "semester": { "type": "string", "description": "Semestre o ciclo actual" },
+        "gpa": { "type": "number", "description": "Promedio académico acumulado" },
+        "attendanceRate": { "type": "number", "description": "Porcentaje de asistencia" },
+        "streakDays": { "type": "number", "description": "Días de racha de estudio consecutivos" },
+        "completedTasksCount": { "type": "number", "description": "Número de tareas completadas" },
+        "dyserNumber": { "type": "string", "description": "Código único Disser del estudiante" },
+        "onboardingCompleted": { "type": "boolean", "description": "Indica si completó el registro inicial" }
+      },
+      "required": ["id", "name"]
+    },
+    "AcademicTask": {
+      "title": "AcademicTask",
+      "description": "Tarea, entrega o examen del estudiante",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la tarea" },
+        "userId": { "type": "string", "description": "UID del usuario propietario" },
+        "title": { "type": "string", "description": "Título de la entrega" },
+        "subject": { "type": "string", "description": "Materia académica" },
+        "dueDate": { "type": "string", "description": "Fecha y hora límite de entrega" },
+        "status": { "type": "string", "enum": ["pendiente", "en-progreso", "completada"] },
+        "type": { "type": "string", "enum": ["tarea", "proyecto", "lectura", "laboratorio", "examen", "otro"] },
+        "isOverdue": { "type": "boolean", "description": "Indica si la fecha de entrega venció" }
+      },
+      "required": ["id", "userId", "title", "subject", "dueDate", "status"]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "Sesión de conversación académica con Nasser IA",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la conversación" },
+        "userId": { "type": "string", "description": "UID del estudiante" },
+        "title": { "type": "string", "description": "Título del hilo de chat" },
+        "createdAt": { "type": "number", "description": "Timestamp de creación" },
+        "updatedAt": { "type": "number", "description": "Timestamp de última actividad" },
+        "topic": { "type": "string", "description": "Tema o categoría" },
+        "isFavorite": { "type": "boolean", "description": "Marcado como favorito" }
+      },
+      "required": ["id", "userId", "title"]
+    },
+    "DailyGoals": {
+      "title": "DailyGoals",
+      "description": "Progreso diario en los 3 objetivos de estudio del usuario",
+      "type": "object",
+      "properties": {
+        "dateKey": { "type": "string", "description": "Fecha en formato YYYY-MM-DD" }
+      },
+      "required": ["dateKey"]
+    }
+  },
+  "firestore": {
+    "/student_profiles/{userId}": {
+      "schema": "StudentProfile",
+      "description": "Perfil académico único aislado por UID"
+    },
+    "/users/{userId}/academic_tasks/{taskId}": {
+      "schema": "AcademicTask",
+      "description": "Tareas académicas privadas de cada usuario"
+    },
+    "/users/{userId}/chat_sessions/{sessionId}": {
+      "schema": "ChatSession",
+      "description": "Historial de conversaciones con Nasser IA del usuario"
+    },
+    "/users/{userId}/daily_goals/{dateKey}": {
+      "schema": "DailyGoals",
+      "description": "Metas de estudio del día para el usuario"
+    }
+  }
+}

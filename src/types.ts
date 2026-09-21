@@ -12,9 +12,7 @@ export type ActiveTab =
   | 'community'
   | 'exam-simulator'
   | 'exposition-study'
-  | 'chameleon-sanctuary'
-  | 'streak'
-  | 'chameleon-road';
+  | 'streak';
 
 export interface CommunityComment {
   id: string;
@@ -53,6 +51,8 @@ export interface CommunityPost {
 }
 
 export interface StudentProfile {
+  id?: string;
+  email?: string;
   name: string;
   avatar: string;
   program: string;
@@ -62,6 +62,15 @@ export interface StudentProfile {
   streakDays: number;
   completedTasksCount: number;
   gamification?: GamificationState;
+  dyserNumber?: string; // Código Disser oficial (ej. "1 60 10")
+  dyserCode?: string;   // Código Disser oficial (ej. "1 60 10")
+  disserCode?: string;  // Código Disser oficial (ej. "1 60 10")
+  onboardingCompleted?: boolean;
+  studyLevel?: 'primaria' | 'secundaria' | 'universidad';
+  goalReason?: string;
+  dailyStudyMinutes?: number;
+  motivationalQuote?: string;
+  authProvider?: 'google' | 'password' | 'guest';
 }
 
 export type TaskPriority = 'alta' | 'media' | 'baja';
@@ -211,6 +220,17 @@ export interface ChatMessage {
   sender: 'user' | 'nasser';
   text: string;
   timestamp: number;
+  mode?: 'summary' | 'blackboard' | 'calculator' | 'guide';
+  guidanceAction?: {
+    targetMode: 'summary' | 'blackboard' | 'calculator';
+    label: string;
+    pendingQuery: string;
+  };
+  attachment?: {
+    name: string;
+    type: 'image' | 'file';
+    dataUrl?: string;
+  };
 }
 
 export interface ChatSession {
@@ -252,38 +272,16 @@ export interface VoiceCoachAnalysis {
 }
 
 // -------------------------------------------------------------
-// SISTEMA DE JUGABILIDAD Y CAMALEÓN (ANTI-MONOTONÍA & RETENCIÓN)
+// SISTEMA DE GAMIFICACIÓN ACADÉMICA Y PROGRESO DE ÉLITE DYSER
 // -------------------------------------------------------------
 
-export type ChameleonSkinId =
-  | 'classic_emerald'
-  | 'phoenix_fire'
-  | 'quantum_cyber'
-  | 'royal_scholar'
-  | 'cosmic_amethyst'
-  | 'shadow_ninja';
-
-export type ChameleonMood =
-  | 'happy'
-  | 'studying'
-  | 'fire_streak'
-  | 'proud'
-  | 'alert'
-  | 'celebrating'
-  | 'sleeping';
-
-export interface ChameleonSkin {
-  id: ChameleonSkinId;
+export interface AcademicBadge {
+  id: string;
   name: string;
   description: string;
-  rarity: 'comun' | 'especial' | 'epico' | 'legendario';
-  requiredLevel: number;
-  requiredStreak?: number;
-  costGems: number;
-  filterStyle: string;
-  auraGradient: string;
-  glowColor: string;
-  badge: string;
+  category: 'constancy' | 'mastery' | 'focus' | 'exam';
+  unlockedAt?: number;
+  iconName: string;
 }
 
 export interface RewardChest {
@@ -297,7 +295,6 @@ export interface RewardChest {
   rewardCoins: number;
   rewardGems: number;
   rewardXp: number;
-  possibleSkin?: ChameleonSkinId;
 }
 
 export interface DailyQuest {
@@ -313,90 +310,6 @@ export interface DailyQuest {
   icon: string;
 }
 
-// -------------------------------------------------------------
-// SISTEMA DE JUGABILIDAD Y CAMALEÓN (EL CAMINO DEL CAMALEÓN 3D)
-// -------------------------------------------------------------
-
-export type ArenaId = 'arena-1' | 'arena-2' | 'arena-3' | 'arena-4' | 'arena-5';
-
-export interface ArenaInfo {
-  id: ArenaId;
-  number: number;
-  name: string; // 'El Nido', 'Sotobosque', 'El Dosel', 'Prisma', 'La Cúpula Solar'
-  subtitle: string;
-  minDew: number;
-  maxDew: number;
-  theme: {
-    bgColor: string;
-    ambientColor: string;
-    lightColor: string;
-    fogColor: string;
-    terrainType: 'earth_roots' | 'undergrowth' | 'canopy' | 'prism' | 'solar_dome';
-    particlesType: 'fireflies' | 'leaves' | 'spores' | 'prisms' | 'sunrays';
-    gradient: string;
-    accentColor: string;
-  };
-  description: string;
-  iconName: string;
-}
-
-export type ArenaNodeType = 'lesson' | 'quiz' | 'boss_exam' | 'dew_cache' | 'sanctuary_chest';
-
-export interface ArenaNode {
-  id: string;
-  arenaId: ArenaId;
-  index: number;
-  title: string;
-  subject: string;
-  type: ArenaNodeType;
-  dewReward: number;
-  isCompleted: boolean;
-  isCurrent: boolean;
-  isLocked: boolean;
-  summaryNote?: string;
-}
-
-export type ChameleonUrgencyStatus = 
-  | 'optimal'          // 0-24h: Piel radiante, 100% de ganancia de gotas
-  | 'dehydrated'       // 24h: Piel café/opaca, 50% de ganancia de gotas
-  | 'predator_attack'  // 48h: Alerta con temporizador de 2h para Quiz Relámpago (-50 a -100 Gotas)
-  | 'pale';            // 72h+: Piel gris pálido / enferma en Home y tablas sociales
-
-export interface PredatorQuizQuestion {
-  id: string;
-  subject: string;
-  question: string;
-  options: string[];
-  correctIndex: number;
-  hint: string;
-}
-
-export interface PredatorAttackEvent {
-  isActive: boolean;
-  expiresAt: number; // timestamp
-  penaltyDew: number; // 50 to 100
-  questions: PredatorQuizQuestion[];
-}
-
-export interface ArenaExamQuestion {
-  id: string;
-  subject: string;
-  question: string;
-  options: string[];
-  correctIndex: number;
-  explanation: string;
-}
-
-export interface ArenaExam {
-  arenaId: ArenaId;
-  arenaNumber: number;
-  currentArenaName: string;
-  targetArenaName: string;
-  requiredDew: number;
-  maxMistakesAllowed: number; // 2
-  questions: ArenaExamQuestion[];
-}
-
 export interface GamificationState {
   xp: number;
   level: number;
@@ -404,20 +317,9 @@ export interface GamificationState {
   nextLevelXp: number;
   dyserGems: number;
   studyCoins: number;
-  dewDrops: number; // Gotas de Rocío (métrica central de progreso y salud)
-  currentArenaId: ArenaId;
-  unlockedArenas: ArenaId[];
-  urgencyStatus: ChameleonUrgencyStatus;
   hoursInactive: number;
   lastStudyTimestamp: number;
-  predatorEvent?: PredatorAttackEvent;
-  activeSubjectColor: string; // Color de piel reactivo según asignatura
-  activeSkin: ChameleonSkinId;
-  unlockedSkins: ChameleonSkinId[];
-  chameleonMood: ChameleonMood;
-  interactionCount: number;
   chests: RewardChest[];
   dailyQuests: DailyQuest[];
-  lastPetTimestamp: number;
-  customModelUrl?: string; // Soporte para importar modelo 3D GLB/GLTF
+  badges?: AcademicBadge[];
 }

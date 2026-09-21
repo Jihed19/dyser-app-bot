@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { BlackboardResult } from '../../types';
 import { nasserAIStudio } from '../../services/nasserEngines';
+import { trackGoalAction } from '../../services/academicGoals';
+import { saveUserNote, saveUserPdf } from '../../services/userVaultService';
 
 export const BlackboardView: React.FC = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export const BlackboardView: React.FC = () => {
       }
 
       setResult(data);
+      trackGoalAction('blackboard');
     } catch (e) {
       console.warn('Activando apunte pedagógico de respaldo:', e);
       // Fallback pedagógico robusto
@@ -99,6 +102,7 @@ export const BlackboardView: React.FC = () => {
 - **Objetivo:** Resolver los estados estacionarios en pozos de potencial unidimensionales.
 - **Conclusión del Profesor:** Las energías están cuantizadas según E_n = (n² π² ħ²) / (2 m L²). Solo existen niveles discretos.`,
       });
+      trackGoalAction('blackboard');
     } finally {
       setIsLoading(false);
     }
@@ -320,12 +324,22 @@ export const BlackboardView: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    nasserAIStudio.generarPDFEducativo(result.boardTitle, [
+                    const pdfDoc = nasserAIStudio.generarPDFEducativo(result.boardTitle, [
                       'Introducción Teórica y Contexto',
                       'Fórmulas y Teoremas Derivados',
                       'Ejercicios Prácticos de Pizarrón',
                       'Conclusiones y Recomendaciones',
                     ]);
+                    // Guardar automáticamente en el Almacén Local del Usuario (IndexedDB)
+                    saveUserNote({
+                      id: `note-blackboard-${Date.now()}`,
+                      title: result.boardTitle,
+                      content: result.rawTranscription,
+                      category: 'pizarra',
+                      subject: result.subjectArea,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    }).catch(() => {});
                     setExportNotice('¡PDF formal estructurado con éxito! Abriendo vista de impresión...');
                     setTimeout(() => window.print(), 300);
                   }}

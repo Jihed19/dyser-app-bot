@@ -268,9 +268,9 @@ export class NasserAICoreEngine {
 
     const focusEntity = analysis.coreConcepts[0] || text.split(' ').slice(0, 3).join(' ');
 
-    // 1. Saludos y bienvenida
+    // 1. Saludos breves: respuesta directa sin presentaciones de relleno
     if (/^(hola|buenos d[ií]as|buenas tardes|buenas noches|hey|qu[eé] tal|saludos)/i.test(text) && text.split(' ').length <= 4) {
-      return `¡Hola! Soy Nasser AI, tu tutor académico autónomo en dyser. Estoy listo para resolver tus dudas en matemáticas, física, programación, ciencias naturales, redacción o preparar tus exámenes. ¿Qué tema quieres estudiar hoy?`;
+      return `Indica el concepto, problema o tema académico que deseas investigar (ciencias, matemáticas, historia, programación) y comenzamos de inmediato con el análisis riguroso.`;
     }
 
     // 2. Fotosíntesis / Biología celular

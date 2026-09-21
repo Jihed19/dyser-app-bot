@@ -36,12 +36,14 @@ interface StudioManualModeProps {
   document: StudioDocument;
   onUpdateDocument: (updated: StudioDocument) => void;
   onShowToast: (toast: { title: string; message: string; type?: 'success' | 'warning' | 'error' | 'info' }) => void;
+  isTopBarCollapsed?: boolean;
 }
 
 export const StudioManualMode: React.FC<StudioManualModeProps> = ({
   document: doc,
   onUpdateDocument,
   onShowToast,
+  isTopBarCollapsed = false,
 }) => {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
@@ -246,7 +248,11 @@ export const StudioManualMode: React.FC<StudioManualModeProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-175px)] min-h-[640px] bg-[#f0f2f5] dark:bg-[#070b14] rounded-3xl border border-gray-200/80 dark:border-gray-800 shadow-sm relative overflow-hidden select-none">
+    <div className={`flex flex-col ${
+      isTopBarCollapsed
+        ? 'h-[calc(100vh-115px)] min-h-[700px]'
+        : 'h-[calc(100vh-175px)] min-h-[640px]'
+    } bg-[#f0f2f5] dark:bg-[#070b14] rounded-3xl border border-gray-200/80 dark:border-gray-800 shadow-sm relative overflow-hidden select-none transition-all duration-300`}>
       {/* =========================================================
           ZONA CENTRAL DEL LIENZO DE TRABAJO (CANVA WORKSPACE)
           ========================================================= */}

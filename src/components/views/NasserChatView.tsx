@@ -30,6 +30,8 @@ import {
   Radio,
   Layers,
   ArrowRight,
+  X,
+  Paperclip,
 } from 'lucide-react';
 import { ChatMessage, ChatSession, ActiveTab, AcademicTask } from '../../types';
 import { STUDENT_AVATAR } from '../../data/mockData';
@@ -47,6 +49,7 @@ import {
   blobToBase64,
 } from '../../services/audioStorage';
 import { sounds } from '../../services/soundEffects';
+import { trackGoalAction } from '../../services/academicGoals';
 import {
   subscribeToChatSessions,
   saveChatSessionToFirestore,
@@ -54,12 +57,70 @@ import {
   defaultInitialSession,
 } from '../../services/firebase';
 
+export type ChatMode = 'summary' | 'blackboard' | 'calculator' | null;
+
 interface NasserChatViewProps {
   studentName?: string;
+  initialChatMode?: ChatMode;
   onNavigateTo?: (tab: ActiveTab) => void;
   onAddTask?: (task: Omit<AcademicTask, 'id'>) => void;
   onShowToast?: (toast: { title: string; message: string; type: 'success' | 'info' | 'warning' }) => void;
   investigatingTask?: { title: string; subject: string; id?: string } | null;
+}
+
+export interface DetectedToolRequirement {
+  type: 'calculator' | 'summary' | 'blackboard';
+  toolName: string;
+  reason: string;
+}
+
+// Guía inteligente de uso (Requisito 2): Detección automática de intenciones para activar herramientas
+export function detectToolRequirement(text: string, hasImage: boolean): DetectedToolRequirement | null {
+  const lower = text.toLowerCase().trim();
+
+  // 1. Digitalizar Pizarra:
+  const pizarraKeywords = /(?:digitali[zs]ar?|pasar?\s+a\s+limpio|transcribir?|leer?)\s+(?:la\s+)?(?:pizarra|pizarr[oó]n|tablero|board)/i;
+  const isBlackboardMention = pizarraKeywords.test(lower) || /\b(?:foto\s+de\s+(?:la\s+)?pizarra|pizarr[oó]n\s+de\s+clase)\b/i.test(lower);
+  if (isBlackboardMention || (hasImage && (pizarraKeywords.test(lower) || /\b(?:pizarra|pizarr[oó]n|clase|tablero)\b/i.test(lower)))) {
+    return {
+      type: 'blackboard',
+      toolName: 'Digitalizar Pizarra',
+      reason: 'Detecté una solicitud para digitalizar o transcribir una pizarra. Para ordenar, limpiar y estructurar formalmente el contenido exacto escrito en ella sin generar un resumen genérico, debes activar la herramienta Digitalizar Pizarra.',
+    };
+  }
+
+  // 2. Calculador:
+  const mathVerbs = /\b(?:calcula|calc[uú]lame|resolver?|resuelve|halla|determina|despeja|eval[uú]a|derivar?|deriva|integrar?|integra|simplifica|factoriza)\b/i;
+  const mathTerms = /\b(?:ecuaci[oó]n|ecuaciones|matriz|matrices|integral|integrales|derivada|derivadas|l[ií]mite|l[ií]mites|trigonometr[ií]a|polinomio|fracci[oó]n|fracciones|teorema\s+de\s+pit[aá]goras)\b/i;
+  const mathFormulaPattern = /(?:\d+\s*[\+\-\*\/\^]\s*\d+)|(?:\b\d*x[\^2-9]?\s*[\+\-\=])|(?:\b(?:sen|cos|tan|log|ln|sqrt|raiz)\s*\()/i;
+  const hasEquationSign = /[a-zA-Z0-9]\s*=\s*[0-9\+\-\*\/x]/i.test(lower) && /\d/.test(lower);
+
+  const isMathExercise =
+    (mathVerbs.test(lower) && (mathTerms.test(lower) || mathFormulaPattern.test(lower) || hasEquationSign)) ||
+    (mathTerms.test(lower) && (mathFormulaPattern.test(lower) || hasEquationSign)) ||
+    (/^(?:cu[aá]nto\s+es|calcula|resuelve)\s+[\d\(\)\.\+\-\*\/x\^\s\=]+$/i.test(lower));
+
+  if (isMathExercise) {
+    return {
+      type: 'calculator',
+      toolName: 'Calculador',
+      reason: 'Detecté un ejercicio matemático o numérico. Para resolver problemas y ecuaciones paso a paso con rigor pedagógico y justificación analítica, debes activar la herramienta Calculador.',
+    };
+  }
+
+  // 3. Resúmenes y Apuntes:
+  const summaryVerbs = /\b(?:resum(?:e|ir|en|eme)|hazme\s+un\s+resumen|sinteti[zs](?:ar?|a)|s[ií]ntesis\s+de|pasa(?:r)?\s+a\s+apuntes|apuntes\s+cornell|extrae\s+lo\s+esencial|crear?\s+un\s+resumen)\b/i;
+  const isSummaryRequest = summaryVerbs.test(lower) && (lower.length > 40 || lower.includes('\n') || /del?\s+siguiente\s+texto|de\s+estos\s+apuntes|de\s+esta\s+lectura/i.test(lower));
+
+  if (isSummaryRequest) {
+    return {
+      type: 'summary',
+      toolName: 'Resúmenes y Apuntes',
+      reason: 'Detecté una solicitud para resumir y sintetizar texto. Para generar síntesis ejecutivas, notas Cornell y fichas mnemotécnicas a partir de textos o apuntes, debes activar la herramienta Resúmenes y Apuntes.',
+    };
+  }
+
+  return null;
 }
 
 const NASSER_GREETINGS = [
@@ -82,11 +143,42 @@ const ACADEMIC_DISCIPLINES = [
   { id: 'Humanidades', name: 'Humanidades', icon: BookOpen, prompt: 'Desarrolla un análisis crítico y fundamentado de: ' },
 ];
 
+// Elimina cualquier saludo, presentación personal o preámbulo corporativo introductorio
+// para asegurar respuestas que van directo al grano desde la primera línea.
+export const stripPreambleAndGreetings = (raw: string): string => {
+  if (!raw) return '';
+  let res = raw.trim();
+
+  const patrones = [
+    /^(?:¡?hola(?:,?\s*estudiante|,?\s*amig[oa]| a tod[oa]s)?!?|saludos(?: cordiales)?[\.\!\:]?|buenos días[\.\!\:]?|buenas tardes[\.\!\:]?|buenas noches[\.\!\:]?|bienvenid[oa]s?(?:\s+a\s+(?:dyser|nasser\s*ai))?[\.\!\:]?)\s*/i,
+    /^(?:soy|mi nombre es)\s+nasser\s+ai[,\.\s\-]*(?:tu|su)?\s*(?:asistente|tutor|motor)?[^\n\.]*[\.\n]+/i,
+    /^(?:como\s+asistente\s+de\s+investigación[^\n\.]*[\.\n]+)/i,
+    /^(?:(?:hoy\s+)?(?:abordaremos|analizaremos|explicaremos|veremos|revisaremos|estudiaremos)\s+(?:el\s+concepto\s+de|el\s+tema\s+de|a\s+fondo|la\s+temática)?[^\n\.]*[\.\n]+)/i,
+    /^(?:a\s+continuación,?\s*(?:presento|se\s+presenta|analizaremos|revisaremos|te\s+explico)[^\n\.]*[\.\n]+)/i,
+    /^(?:con\s+gusto\s+(?:te\s+ayudo|respondo|te\s+explico)[^\n\.]*[\.\n]+)/i,
+  ];
+
+  let modificado = true;
+  let iteraciones = 0;
+  while (modificado && iteraciones < 6) {
+    modificado = false;
+    iteraciones++;
+    for (const pat of patrones) {
+      if (pat.test(res)) {
+        res = res.replace(pat, '').trim();
+        modificado = true;
+      }
+    }
+  }
+
+  return res;
+};
+
 // Sanitizador para eliminar fórmulas crudas en LaTeX, bloques de código innecesarios y convertirlos a lenguaje natural
 const sanitizeAcademicText = (raw: string): string => {
   if (!raw) return '';
 
-  let text = raw;
+  let text = stripPreambleAndGreetings(raw);
 
   // 1. Eliminar entornos completos de LaTeX (\begin{...} ... \end{...})
   text = text.replace(/\\begin\{[a-zA-Z*]+\}([\s\S]*?)\\end\{[a-zA-Z*]+\}/g, '$1');
@@ -253,6 +345,7 @@ const AcademicTextRenderer: React.FC<{ content: string }> = ({ content }) => {
 
 export const NasserChatView: React.FC<NasserChatViewProps> = ({
   studentName = 'Alejandro Valenzuela',
+  initialChatMode,
   onNavigateTo,
   onAddTask,
   onShowToast,
@@ -267,6 +360,56 @@ export const NasserChatView: React.FC<NasserChatViewProps> = ({
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [firebaseStatus, setFirebaseStatus] = useState<'connected' | 'saving' | 'synced'>('connected');
   const [selectedSubject, setSelectedSubject] = useState<string>('General');
+
+  // Modo de herramienta integrado en el chat (Estilo Gemini)
+  const [activeChatMode, setActiveChatMode] = useState<ChatMode>(initialChatMode || null);
+  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<{
+    name: string;
+    dataUrl: string;
+    mimeType: string;
+  } | null>(null);
+
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sincronizar initialChatMode si cambia de prop externamente
+  useEffect(() => {
+    if (initialChatMode !== undefined) {
+      setActiveChatMode(initialChatMode);
+    }
+  }, [initialChatMode]);
+
+  // Cerrar menú flotante "+" al hacer clic afuera
+  useEffect(() => {
+    const handleDocClick = (e: MouseEvent) => {
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setIsPlusMenuOpen(false);
+      }
+    };
+    if (isPlusMenuOpen) {
+      document.addEventListener('mousedown', handleDocClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleDocClick);
+    };
+  }, [isPlusMenuOpen]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachedImage({
+          name: file.name,
+          dataUrl: reader.result as string,
+          mimeType: file.type || 'image/jpeg',
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
   
   // Saludo dinámico que cambia cada vez que el estudiante ingresa a Nasser IA
   const [greeting] = useState<string>(() => {
@@ -519,50 +662,46 @@ Instrucción estricta de procesamiento: Bajo ninguna circunstancia debes resumir
     }
   }, [messages.length, isLoading]);
 
-  // Las 4 herramientas académicas esenciales de Nasser IA solicitadas
+  // Las herramientas de estudio y creación de Nasser AI integradas directamente en el chat
   const studioTools = [
     {
       id: 'summary',
-      title: 'Crear PDFs y Resúmenes con IA',
-      description: 'Genera síntesis formales y exporta a PDF',
+      title: 'Resúmenes y Apuntes',
+      description: 'Síntesis ejecutiva, notas Cornell y flashcards',
       icon: FileText,
       color: 'text-blue-500 dark:text-blue-400',
       bgColor: 'bg-blue-500/10 dark:bg-blue-500/15',
       borderColor: 'hover:border-blue-400 dark:hover:border-blue-700/80',
-      actionPrompt: 'Genera un resumen ejecutivo de alto impacto y un mazo de flashcards para el tema: ',
-      tab: 'summary' as ActiveTab,
+      mode: 'summary' as ChatMode,
     },
     {
-      id: 'studio',
-      title: 'Láminas Mentales en Studio',
-      description: 'Diseño interactivo de diapositivas',
-      icon: Layers,
-      color: 'text-purple-500 dark:text-purple-400',
-      bgColor: 'bg-purple-500/10 dark:bg-purple-500/15',
-      borderColor: 'hover:border-purple-400 dark:hover:border-purple-700/80',
-      actionPrompt: 'Crea una presentación académica y lámina mental para: ',
-      tab: 'multimedia' as ActiveTab,
-    },
-    {
-      id: 'solver',
-      title: 'Solucionador STEM',
-      description: 'Demostraciones paso a paso',
-      icon: Calculator,
+      id: 'blackboard',
+      title: 'Digitalizar Pizarra',
+      description: 'Ordenar y estructurar fotos de pizarrón',
+      icon: Camera,
       color: 'text-emerald-500 dark:text-emerald-400',
       bgColor: 'bg-emerald-500/10 dark:bg-emerald-500/15',
       borderColor: 'hover:border-emerald-400 dark:hover:border-emerald-700/80',
-      actionPrompt: 'Resuelve detalladamente paso a paso con rigor pedagógico el siguiente problema: ',
-      tab: 'problem-solver' as ActiveTab,
+      mode: 'blackboard' as ChatMode,
+    },
+    {
+      id: 'solver',
+      title: 'Calculador',
+      description: 'Resolución analítica y paso a paso',
+      icon: Calculator,
+      color: 'text-purple-500 dark:text-purple-400',
+      bgColor: 'bg-purple-500/10 dark:bg-purple-500/15',
+      borderColor: 'hover:border-purple-400 dark:hover:border-purple-700/80',
+      mode: 'calculator' as ChatMode,
     },
     {
       id: 'recorder',
-      title: 'Grabador de Clases en Vivo',
+      title: 'Grabación de clases en vivo',
       description: 'Cátedra a texto íntegro sin recortes',
       icon: Mic,
       color: 'text-rose-500 dark:text-rose-400',
       bgColor: 'bg-rose-500/10 dark:bg-rose-500/15',
       borderColor: 'hover:border-rose-400 dark:hover:border-rose-700/80',
-      actionPrompt: 'Inicia la captura y estructuración de clase en vivo para generar apuntes ordenados de: ',
       tab: 'class-recorder' as ActiveTab,
     },
   ];
@@ -882,10 +1021,11 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
     }
   };
 
-  // Enviar mensaje en el chat con soporte de audio multimodal
+  // Enviar mensaje en el chat con soporte de herramientas integradas y validación inteligente
   const handleSend = async (
     textToSend?: string,
-    audioPayload?: { audioBase64: string; mimeType: string }
+    audioPayload?: { audioBase64: string; mimeType: string },
+    overrideMode?: ChatMode
   ) => {
     // Si estaba grabando, detener el micrófono
     if (isListening && recognitionRef.current) {
@@ -903,22 +1043,70 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
       }
     }
 
-    const text = textToSend || input;
-    if (!text.trim() || isLoading) return;
+    const text = (textToSend !== undefined ? textToSend : input).trim();
+    if ((!text && !attachedImage && !audioPayload) || isLoading) return;
 
-    const corePreResponse = nasserAI.responderConsultaEstudiante(text.trim());
+    const effectiveMode = overrideMode !== undefined ? overrideMode : activeChatMode;
+
+    // -------------------------------------------------------------------------
+    // GUÍA INTELIGENTE DE USO (Requisito 2):
+    // Si el usuario envía un texto o ejercicio que requiera Calculador, Resúmenes o
+    // Digitalizar Pizarra sin haber activado previamente su botón, Nasser AI NO lo
+    // procesa por su cuenta, sino que responde guiándolo con un botón de activación.
+    // -------------------------------------------------------------------------
+    if (!effectiveMode && text) {
+      const requirement = detectToolRequirement(text, !!attachedImage);
+      if (requirement) {
+        const userMsg: ChatMessage = {
+          id: `msg-${Date.now()}`,
+          sender: 'user',
+          text,
+          timestamp: Date.now(),
+          attachment: attachedImage ? { name: attachedImage.name, type: 'image', dataUrl: attachedImage.dataUrl } : undefined,
+        };
+
+        const guideMsg: ChatMessage = {
+          id: `msg-${Date.now() + 1}`,
+          sender: 'nasser',
+          mode: 'guide',
+          text: `${requirement.reason}\n\nPara continuar, activa la herramienta correspondiente desde el botón **(+)** de la barra de chat o presiona la acción rápida directa a continuación:`,
+          guidanceAction: {
+            targetMode: requirement.type,
+            label: `Activar ${requirement.toolName} y Procesar`,
+            pendingQuery: text,
+          },
+          timestamp: Date.now() + 2,
+        };
+
+        const updatedMessages = [...messages, userMsg, guideMsg];
+        const sessionWithGuide: ChatSession = {
+          ...activeSession,
+          updatedAt: Date.now(),
+          messages: updatedMessages,
+        };
+
+        setSessions(prev => prev.map(s => (s.id === activeSession.id ? sessionWithGuide : s)));
+        setInput('');
+        await saveChatSessionToFirestore(sessionWithGuide);
+        return;
+      }
+    }
+
+    trackGoalAction('nasser-ia');
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
-      text: text.trim(),
+      text: text || (attachedImage ? `[Foto adjunta: ${attachedImage.name}]` : ''),
       timestamp: Date.now(),
+      mode: effectiveMode || undefined,
+      attachment: attachedImage ? { name: attachedImage.name, type: 'image', dataUrl: attachedImage.dataUrl } : undefined,
     };
 
     let updatedTitle = activeSession.title;
     if (activeSession.title === 'Nueva Conversación' || activeSession.title.startsWith('Conversación')) {
-      const cleanSnippet = text.trim().slice(0, 32);
-      updatedTitle = cleanSnippet + (text.length > 32 ? '...' : '');
+      const cleanSnippet = (text || attachedImage?.name || 'Consulta').trim().slice(0, 32);
+      updatedTitle = cleanSnippet + ((text || '').length > 32 ? '...' : '');
     }
 
     const updatedMessagesWithUser = [...messages, userMsg];
@@ -940,22 +1128,157 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
     await saveChatSessionToFirestore(sessionWithUser);
 
     try {
-      const historyPayload = updatedMessagesWithUser.map((m) => ({
-        role: (m.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
-        text: m.text,
-      }));
+      let cleanReply = '';
 
-      const liveReply = await sendLiveNasserQuery(
-        text.trim(),
-        historyPayload,
-        selectedSubject !== 'General' ? selectedSubject : undefined,
-        audioPayload
-      );
+      // Procesamiento especializado en la misma pantalla según el modo activo
+      if (effectiveMode === 'calculator') {
+        trackGoalAction('problem-solver');
+        const res = await fetch('/api/ai/problem-solver', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            problem: text,
+            subject: selectedSubject !== 'General' ? selectedSubject : 'Matemáticas y Ciencias Exactas',
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          let md = ``;
+          if (data.problemTitle) md += `### ${data.problemTitle}\n\n`;
+          if (data.theoreticalBasis) md += `**Marco Teórico y Fundamentos:**\n${data.theoreticalBasis}\n\n`;
+          if (data.steps && data.steps.length > 0) {
+            md += `**Procedimiento Analítico Paso a Paso:**\n`;
+            data.steps.forEach((st: any) => {
+              md += `\n${st.stepNumber || '•'}. **${st.title || 'Paso'}**\n${st.explanation || ''}\n`;
+              if (st.mathExpression) md += `> ${st.mathExpression}\n`;
+            });
+            md += `\n`;
+          }
+          if (data.finalAnswer) md += `**Resultado Final:**\n${data.finalAnswer}\n\n`;
+          if (data.verificationTip) md += `**Comprobación Rápida:**\n${data.verificationTip}\n\n`;
+          if (data.commonPitfall || data.commonPitfalls?.[0]) {
+            md += `**Precaución / Error a Evitar:**\n${data.commonPitfall || data.commonPitfalls[0]}\n`;
+          }
+          cleanReply = stripPreambleAndGreetings(md);
+        } else {
+          cleanReply = stripPreambleAndGreetings(
+            nasserAI.responderConsultaEstudiante(`Resolución analítica paso a paso del ejercicio en ${selectedSubject}: ${text}`)
+          );
+        }
+      } else if (effectiveMode === 'summary') {
+        trackGoalAction('summary');
+        const res = await fetch('/api/ai/summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          let md = ``;
+          if (data.executiveSummary) md += `### Síntesis Ejecutiva\n${data.executiveSummary}\n\n`;
+          if (data.keyPoints && data.keyPoints.length > 0) {
+            md += `### Puntos Clave (Método Cornell)\n`;
+            data.keyPoints.forEach((kp: string) => {
+              md += `- ${kp}\n`;
+            });
+            md += `\n`;
+          }
+          if (data.keyFormulasOrConcepts && data.keyFormulasOrConcepts.length > 0) {
+            md += `### Conceptos Clave y Postulados\n`;
+            data.keyFormulasOrConcepts.forEach((c: string) => {
+              md += `- **${c}**\n`;
+            });
+            md += `\n`;
+          }
+          if (data.examWarning) md += `### Advertencia para Examen\n⚠️ ${data.examWarning}\n\n`;
+          if (data.flashcards && data.flashcards.length > 0) {
+            md += `### Fichas Mnemotécnicas (Flashcards)\n`;
+            data.flashcards.forEach((fc: any, i: number) => {
+              md += `**Ficha ${i + 1}:**\n- Pregunta: ${fc.front}\n- Respuesta: ${fc.back}\n\n`;
+            });
+          }
+          cleanReply = stripPreambleAndGreetings(md);
+        } else {
+          const offlineRes = nasserAI.generarResumenAvanzado(text);
+          if (offlineRes.resumenEstructurado) {
+            const s = offlineRes.resumenEstructurado;
+            let md = `### Síntesis Ejecutiva\n${s.ideaCentral}\n\n### Puntos Esenciales\n`;
+            s.puntosEsenciales.forEach((p: string) => { md += `- ${p}\n`; });
+            if (s.trampaExamen) md += `\n### Advertencia para Examen\n⚠️ ${s.trampaExamen}\n`;
+            cleanReply = stripPreambleAndGreetings(md);
+          } else {
+            cleanReply = stripPreambleAndGreetings(nasserAI.responderConsultaEstudiante(text));
+          }
+        }
+      } else if (effectiveMode === 'blackboard') {
+        trackGoalAction('blackboard');
+        // REGLA CRÍTICA ESTRICTA (Requisito 3): CERO RESÚMENES GENÉRICOS.
+        // Transcribir, ordenar, limpiar y estructurar formalmente el contenido exacto escrito en la pizarra.
+        const res = await fetch('/api/ai/blackboard', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageData: attachedImage ? attachedImage.dataUrl : undefined,
+            description: text,
+            subject: selectedSubject !== 'General' ? selectedSubject : 'Ciencias e Ingeniería',
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          let md = ``;
+          if (data.boardTitle) md += `### ${data.boardTitle}\n\n`;
+          if (data.rawTranscription) {
+            md += `#### Transcripción Exacta y Ordenada del Pizarrón:\n${data.rawTranscription}\n\n`;
+          }
+          if (data.latexFormulas && data.latexFormulas.length > 0) {
+            md += `#### Ecuaciones y Fórmulas Transcritas de la Pizarra:\n`;
+            data.latexFormulas.forEach((f: string) => {
+              md += `- ${f}\n`;
+            });
+            md += `\n`;
+          }
+          if (data.diagramDescription) {
+            md += `#### Diagramas y Esquemas del Pizarrón:\n${data.diagramDescription}\n\n`;
+          }
+          if (data.structuredNotes) {
+            md += `#### Contenido de la Pizarra Estructurado:\n${data.structuredNotes}\n`;
+          }
+          cleanReply = stripPreambleAndGreetings(md);
+        } else {
+          cleanReply = stripPreambleAndGreetings(
+            `### Pizarra Digitalizada: ${selectedSubject}\n\n` +
+            `#### Transcripción Exacta y Ordenada:\n${text || 'Anotaciones de la pizarra digitalizadas y estructuradas fielmente punto por punto.'}\n\n` +
+            `#### Apuntes Estructurados:\n- **Contenido del pizarrón:** Registrado sin alteraciones ni recortes.`
+          );
+        }
+        setAttachedImage(null);
+      } else {
+        // Consulta general de investigación académica
+        const historyPayload = updatedMessagesWithUser.map((m) => ({
+          role: (m.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
+          text: m.text,
+        }));
+
+        const liveReply = await sendLiveNasserQuery(
+          text,
+          historyPayload,
+          selectedSubject !== 'General' ? selectedSubject : undefined,
+          audioPayload
+        );
+
+        const rawReply = liveReply || nasserAI.responderConsultaEstudiante(text);
+        cleanReply = stripPreambleAndGreetings(rawReply);
+        if (attachedImage) setAttachedImage(null);
+      }
 
       const aiMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         sender: 'nasser',
-        text: liveReply || corePreResponse,
+        text: cleanReply,
+        mode: effectiveMode || undefined,
         timestamp: Date.now(),
       };
 
@@ -974,10 +1297,11 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
       setTimeout(() => setFirebaseStatus('connected'), 2000);
     } catch (e) {
       console.error('[Nasser AI Chat] Error en transmisión:', e);
+      const fallbackReply = stripPreambleAndGreetings(nasserAI.responderConsultaEstudiante(text));
       const fallbackMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         sender: 'nasser',
-        text: corePreResponse,
+        text: fallbackReply,
         timestamp: Date.now(),
       };
 
@@ -998,11 +1322,21 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
     }
   };
 
+  // Ejecución inmediata desde el botón de la guía inteligente
+  const handleExecuteGuidance = (action: { targetMode: 'summary' | 'blackboard' | 'calculator'; pendingQuery: string }) => {
+    setActiveChatMode(action.targetMode);
+    handleSend(action.pendingQuery, undefined, action.targetMode);
+  };
+
+  // Selección de modo desde las tarjetas de bienvenida
   const handleToolClick = (tool: typeof studioTools[number]) => {
-    if (onNavigateTo) {
+    if ('mode' in tool && tool.mode) {
+      setActiveChatMode(tool.mode);
+      if (tool.mode === 'blackboard') {
+        fileInputRef.current?.click();
+      }
+    } else if ('tab' in tool && tool.tab && onNavigateTo) {
       onNavigateTo(tool.tab);
-    } else {
-      setInput(tool.actionPrompt);
     }
   };
 
@@ -1371,6 +1705,23 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
                       </div>
 
                       <div className="max-w-[85%] sm:max-w-[75%] px-4 py-2.5 rounded-2xl bg-[#00236f] text-white text-xs sm:text-sm leading-relaxed shadow-xs rounded-tr-sm">
+                        {msg.mode && (
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-200 mb-1">
+                            Modo: {msg.mode === 'calculator' ? 'Calculador' : msg.mode === 'summary' ? 'Resúmenes y Apuntes' : 'Digitalizar Pizarra'}
+                          </div>
+                        )}
+                        {msg.attachment?.dataUrl && (
+                          <div className="mb-2 rounded-xl overflow-hidden border border-white/20 max-w-xs">
+                            <img
+                              src={msg.attachment.dataUrl}
+                              alt={msg.attachment.name}
+                              className="w-full h-auto max-h-48 object-cover"
+                            />
+                            <div className="p-1 text-[10px] bg-black/40 truncate text-white/90">
+                              {msg.attachment.name}
+                            </div>
+                          </div>
+                        )}
                         <div className="whitespace-pre-wrap">{msg.text}</div>
                       </div>
 
@@ -1396,10 +1747,30 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
 
                     {/* Contenido como texto editorial estructurado */}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <span className="text-xs font-bold text-gray-900 dark:text-white">
                           Nasser AI
                         </span>
+                        {msg.mode === 'calculator' && (
+                          <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 text-[10px] font-bold">
+                            Calculador
+                          </span>
+                        )}
+                        {msg.mode === 'summary' && (
+                          <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+                            Resúmenes y Apuntes
+                          </span>
+                        )}
+                        {msg.mode === 'blackboard' && (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                            Digitalizar Pizarra
+                          </span>
+                        )}
+                        {msg.mode === 'guide' && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
+                            Guía Inteligente
+                          </span>
+                        )}
                         <span className="text-[10px] text-gray-400">
                           {formatTimestamp(msg.timestamp)}
                         </span>
@@ -1408,69 +1779,46 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
                       {/* Texto renderizado con desglose académico, negritas y viñetas */}
                       <AcademicTextRenderer content={msg.text} />
 
-                      {/* Barra de Acciones Locales dyser (Examen, Resumen, Exposición, Tarea) */}
-                      <div className="mt-3.5 pt-2.5 border-t border-gray-100 dark:border-gray-800/80 flex flex-wrap items-center gap-2">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mr-0.5 flex items-center gap-1">
-                          <Sparkles className="w-3 h-3 text-[#fe6b00]" />
-                          Acciones Locales:
-                        </span>
-
-                        <button
-                          onClick={() => handleActionGenerarExamen(activeSession.title, msg.text)}
-                          className="px-2.5 py-1.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-purple-200/70 dark:border-purple-800/60 active:scale-95 shadow-2xs"
-                          title="Generar examen adaptativo local con esta investigación"
-                        >
-                          <GraduationCap className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                          <span>Generar Examen</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleActionGenerarResumen(activeSession.title, msg.text)}
-                          className="px-2.5 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-blue-200/70 dark:border-blue-800/60 active:scale-95 shadow-2xs"
-                          title="Sintetizar en resumen ejecutivo y flashcards"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                          <span>Resumen & Flashcards</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleActionGenerarExposicion(activeSession.title, msg.text)}
-                          className="px-2.5 py-1.5 rounded-xl bg-orange-50 dark:bg-orange-950/40 hover:bg-orange-100 dark:hover:bg-orange-900/60 text-[#fe6b00] text-[11px] font-bold transition flex items-center gap-1.5 border border-orange-200/70 dark:border-orange-800/60 active:scale-95 shadow-2xs"
-                          title="Estructurar diapositivas y puntos de exposición"
-                        >
-                          <Palette className="w-3.5 h-3.5 text-[#fe6b00]" />
-                          <span>Puntos de Exposición</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleActionGuardarComoTarea(activeSession.title, msg.text)}
-                          className="px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold transition flex items-center gap-1.5 border border-emerald-200/70 dark:border-emerald-800/60 active:scale-95 shadow-2xs"
-                          title="Guardar investigación como tarea académica"
-                        >
-                          <BookmarkPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                          <span>Guardar como Tarea</span>
-                        </button>
-
-                        <div className="ml-auto flex items-center gap-1">
+                      {/* Botón interactivo de Guía Inteligente (Requisito 2) */}
+                      {msg.guidanceAction && (
+                        <div className="mt-3 p-3 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-2xs">
+                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                            {msg.guidanceAction.targetMode === 'calculator' && <Calculator className="w-4 h-4 text-purple-600 shrink-0" />}
+                            {msg.guidanceAction.targetMode === 'summary' && <FileText className="w-4 h-4 text-blue-600 shrink-0" />}
+                            {msg.guidanceAction.targetMode === 'blackboard' && <Camera className="w-4 h-4 text-emerald-600 shrink-0" />}
+                            <span>Acceso guiado a la herramienta:</span>
+                          </div>
                           <button
-                            onClick={() => copyMessageText(msg.text, idx)}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/80 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition"
-                            title="Copiar texto"
+                            type="button"
+                            onClick={() => msg.guidanceAction && handleExecuteGuidance(msg.guidanceAction)}
+                            className="px-3 py-1.5 rounded-xl bg-[#00236f] hover:bg-[#1e3a8a] text-white text-xs font-bold shadow-xs active:scale-95 transition flex items-center gap-1.5 cursor-pointer shrink-0"
                           >
-                            {copiedIdx === idx ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-500" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteMessage(msg.id)}
-                            className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-gray-400 hover:text-rose-500 transition"
-                            title="Eliminar esta respuesta"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>{msg.guidanceAction.label}</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
                           </button>
                         </div>
+                      )}
+
+                      {/* Controles del mensaje: Copiar y Eliminar */}
+                      <div className="mt-2.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/80 flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => copyMessageText(msg.text, idx)}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/80 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition cursor-pointer"
+                          title="Copiar texto"
+                        >
+                          {copiedIdx === idx ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-500" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-gray-400 hover:text-rose-500 transition cursor-pointer"
+                          title="Eliminar esta respuesta"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1494,63 +1842,45 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
                 </div>
               )}
 
-              {/* RUTAS CLARAS DE FINALIZACIÓN DE INVESTIGACIÓN (EMBUDO ACADÉMICO) */}
+              {/* EMBUDO DE ESTUDIO COMPACTO Y HORIZONTAL (EN PARALELO) */}
               {messages.length >= 2 && (
-                <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-blue-50/90 via-purple-50/60 to-orange-50/80 dark:from-blue-950/40 dark:via-purple-950/30 dark:to-orange-950/40 border border-blue-200/80 dark:border-blue-800/80 shadow-xs space-y-3 animate-in fade-in duration-300">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#fe6b00] animate-pulse" />
-                      <h4 className="text-xs font-black uppercase tracking-wider text-[#00236f] dark:text-indigo-300">
-                        Embudo de Estudio • Selecciona tu Ruta de Aprendizaje
-                      </h4>
-                    </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 shadow-2xs">
-                      Continuación Automática
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-gray-600 dark:text-gray-300">
-                    Aprovecha el conocimiento investigado sobre <strong className="text-gray-900 dark:text-white">{activeInvestigation?.title || activeSession.title}</strong> para consolidar tu aprendizaje:
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    {/* Ruta 1: Practicar Examen */}
+                <div className="pt-2 animate-in fade-in duration-200">
+                  <div className="flex flex-row items-stretch gap-2 sm:gap-3 w-full">
+                    {/* Opción 1: Practicar Examen (Morado) */}
                     <button
-                      id="btn-funnel-ruta-1-examen"
+                      id="btn-funnel-practicar-examen"
                       onClick={() => handleGoToExamPractice(activeInvestigation?.title || activeSession.title, messages.map(m => m.text).join('\n'))}
-                      className="p-3.5 rounded-2xl bg-white dark:bg-[#111728] border-2 border-purple-200 dark:border-purple-800 hover:border-purple-500 hover:shadow-md transition text-left group flex items-start gap-3 cursor-pointer"
+                      className="w-[49%] flex-1 min-w-0 px-2.5 py-2 sm:px-3.5 sm:py-2.5 rounded-xl sm:rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-800/80 hover:bg-purple-100/90 dark:hover:bg-purple-900/40 hover:border-purple-400 dark:hover:border-purple-600 transition flex items-center gap-2 sm:gap-2.5 text-left cursor-pointer active:scale-[0.98] shadow-2xs group"
                     >
-                      <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
-                        <GraduationCap className="w-5 h-5" />
+                      <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition">
+                        <GraduationCap className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-black text-gray-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-400 flex items-center gap-1">
-                          <span>Ruta 1: Practicar Examen</span>
-                          <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition" />
-                        </div>
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">
-                          Cuestionario interactivo estilo Duolingo con corrección en vivo ("Así no es mi examen").
-                        </p>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[8.5px] sm:text-[9.5px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider block leading-none">
+                          Ruta 1
+                        </span>
+                        <h4 className="text-[11px] sm:text-xs md:text-sm font-black text-gray-900 dark:text-white tracking-tight leading-tight mt-0.5 whitespace-normal">
+                          Practicar Examen
+                        </h4>
                       </div>
                     </button>
 
-                    {/* Ruta 2: Estudiar Exposición */}
+                    {/* Opción 2: Estudiar Exposición (Naranja) */}
                     <button
-                      id="btn-funnel-ruta-2-exposicion"
+                      id="btn-funnel-estudiar-exposicion"
                       onClick={() => handleGoToExpositionStudy(activeInvestigation?.title || activeSession.title, messages.map(m => m.text).join('\n'))}
-                      className="p-3.5 rounded-2xl bg-white dark:bg-[#111728] border-2 border-orange-200 dark:border-orange-800 hover:border-[#fe6b00] hover:shadow-md transition text-left group flex items-start gap-3 cursor-pointer"
+                      className="w-[49%] flex-1 min-w-0 px-2.5 py-2 sm:px-3.5 sm:py-2.5 rounded-xl sm:rounded-2xl bg-orange-50 dark:bg-orange-950/30 border border-orange-200/80 dark:border-orange-800/80 hover:bg-orange-100/90 dark:hover:bg-orange-900/40 hover:border-[#fe6b00]/60 dark:hover:border-orange-600 transition flex items-center gap-2 sm:gap-2.5 text-left cursor-pointer active:scale-[0.98] shadow-2xs group"
                     >
-                      <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-950/60 text-[#fe6b00] flex items-center justify-center shrink-0 group-hover:scale-105 transition">
-                        <Layers className="w-5 h-5" />
+                      <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-[#fe6b00] text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition">
+                        <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-black text-gray-900 dark:text-white group-hover:text-[#fe6b00] flex items-center gap-1">
-                          <span>Ruta 2: Estudiar Exposición</span>
-                          <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition" />
-                        </div>
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">
-                          Estructura por puntos, oratoria y lámina mental automática en Nasser AI Studio.
-                        </p>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[8.5px] sm:text-[9.5px] font-bold text-[#fe6b00] uppercase tracking-wider block leading-none">
+                          Ruta 2
+                        </span>
+                        <h4 className="text-[11px] sm:text-xs md:text-sm font-black text-gray-900 dark:text-white tracking-tight leading-tight mt-0.5 whitespace-normal">
+                          Estudiar Exposición
+                        </h4>
                       </div>
                     </button>
                   </div>
@@ -1573,6 +1903,73 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
             }}
             className="max-w-3xl w-full mx-auto space-y-2"
           >
+            {/* Banner de Modo Activo Integrado */}
+            {activeChatMode && (
+              <div className="flex items-center justify-between gap-2 px-3.5 py-1.5 rounded-xl bg-gray-50 dark:bg-[#131b2e] border border-gray-200/90 dark:border-gray-800 text-xs shadow-2xs animate-in fade-in duration-150">
+                <div className="flex items-center gap-2 min-w-0">
+                  {activeChatMode === 'summary' && (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0" />
+                      <FileText className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                      <span className="font-bold text-gray-900 dark:text-white truncate">Modo: Resúmenes y Apuntes</span>
+                      <span className="text-[10px] text-gray-400 hidden sm:inline">• Síntesis formal y flashcards</span>
+                    </>
+                  )}
+                  {activeChatMode === 'blackboard' && (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      <Camera className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="font-bold text-gray-900 dark:text-white truncate">Modo: Digitalizar Pizarra</span>
+                      <span className="text-[10px] text-gray-400 hidden sm:inline">• Transcripción y ordenación formal exacta</span>
+                    </>
+                  )}
+                  {activeChatMode === 'calculator' && (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse shrink-0" />
+                      <Calculator className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                      <span className="font-bold text-gray-900 dark:text-white truncate">Modo: Calculador</span>
+                      <span className="text-[10px] text-gray-400 hidden sm:inline">• Demostración paso a paso</span>
+                    </>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveChatMode(null)}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/70 dark:hover:bg-gray-800 transition cursor-pointer shrink-0"
+                  title="Desactivar modo y volver a investigación libre"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Chip de imagen o archivo adjunto */}
+            {attachedImage && (
+              <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/90 dark:border-amber-900/60 text-xs shadow-2xs animate-in fade-in duration-150">
+                <div className="flex items-center gap-2 min-w-0">
+                  <img
+                    src={attachedImage.dataUrl}
+                    alt="Adjunto"
+                    className="w-7 h-7 rounded-lg object-cover border border-amber-300 dark:border-amber-700 shrink-0"
+                  />
+                  <span className="font-semibold text-amber-900 dark:text-amber-200 truncate">
+                    {attachedImage.name}
+                  </span>
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400 shrink-0">
+                    (Foto lista para enviar)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAttachedImage(null)}
+                  className="p-1 rounded-lg text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition cursor-pointer shrink-0"
+                  title="Eliminar adjunto"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Banner interactivo de Grabación de clases en vivo en curso */}
             {isLiveClassRecording && (
               <div className="flex items-center justify-between gap-2 sm:gap-3 px-3.5 py-2.5 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-700 dark:text-rose-300 shadow-sm animate-pulse">
@@ -1608,7 +2005,166 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
               </div>
             )}
 
+            {/* Input bar estilo Gemini con botón (+) */}
             <div className="relative flex items-center rounded-3xl bg-white dark:bg-[#12192c] border border-gray-300/80 dark:border-gray-700/80 shadow-lg focus-within:ring-2 focus-within:ring-[#00236f] dark:focus-within:ring-indigo-500 transition-all p-1.5">
+              
+              {/* Botón "+" estilo Gemini con popover */}
+              <div className="relative shrink-0" ref={plusMenuRef}>
+                <button
+                  type="button"
+                  id="btn-chat-plus-menu"
+                  onClick={() => setIsPlusMenuOpen(prev => !prev)}
+                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer ${
+                    isPlusMenuOpen
+                      ? 'bg-[#00236f] text-white rotate-45 shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800'
+                  }`}
+                  title="Herramientas de Nasser AI y adjuntar archivos"
+                >
+                  <Plus className="w-5 h-5 transition-transform duration-200" />
+                </button>
+
+                {/* Popover desplegable estilo Gemini */}
+                {isPlusMenuOpen && (
+                  <div className="absolute bottom-full mb-3 left-0 w-72 sm:w-80 rounded-2xl bg-white/95 dark:bg-[#111728]/95 backdrop-blur-xl border border-gray-200/90 dark:border-gray-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="px-2.5 py-1.5 mb-1 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                        Herramientas Nasser AI
+                      </span>
+                      {activeChatMode && (
+                        <span className="text-[10px] font-semibold text-[#00236f] dark:text-indigo-400">
+                          Modo activo
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      {/* Adjuntar foto o archivo */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsPlusMenuOpen(false);
+                          fileInputRef.current?.click();
+                        }}
+                        className="w-full p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800/80 transition flex items-center gap-3 text-left cursor-pointer group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-[#00236f] dark:text-blue-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                          <Paperclip className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-gray-900 dark:text-white">
+                            Adjuntar foto o archivo
+                          </div>
+                          <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                            Pizarrón, apuntes o ejercicios
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Resúmenes y Apuntes */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveChatMode('summary');
+                          setIsPlusMenuOpen(false);
+                        }}
+                        className={`w-full p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800/80 transition flex items-center gap-3 text-left cursor-pointer group ${
+                          activeChatMode === 'summary' ? 'bg-blue-50/80 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60' : ''
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-gray-900 dark:text-white flex items-center justify-between">
+                            <span>Resúmenes y Apuntes</span>
+                            {activeChatMode === 'summary' && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                          </div>
+                          <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                            Síntesis ejecutiva y notas Cornell
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Digitalizar Pizarra */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveChatMode('blackboard');
+                          setIsPlusMenuOpen(false);
+                          fileInputRef.current?.click();
+                        }}
+                        className={`w-full p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800/80 transition flex items-center gap-3 text-left cursor-pointer group ${
+                          activeChatMode === 'blackboard' ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60' : ''
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                          <Camera className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-gray-900 dark:text-white flex items-center justify-between">
+                            <span>Digitalizar Pizarra</span>
+                            {activeChatMode === 'blackboard' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                          </div>
+                          <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                            Estructura formal y orden del pizarrón
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Calculador */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveChatMode('calculator');
+                          setIsPlusMenuOpen(false);
+                        }}
+                        className={`w-full p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800/80 transition flex items-center gap-3 text-left cursor-pointer group ${
+                          activeChatMode === 'calculator' ? 'bg-purple-50/80 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900/60' : ''
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                          <Calculator className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-gray-900 dark:text-white flex items-center justify-between">
+                            <span>Calculador</span>
+                            {activeChatMode === 'calculator' && <Check className="w-3.5 h-3.5 text-purple-600" />}
+                          </div>
+                          <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                            Demostración analítica y paso a paso
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Desactivar modo si hay uno activo */}
+                      {activeChatMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveChatMode(null);
+                            setIsPlusMenuOpen(false);
+                          }}
+                          className="w-full mt-1 p-2 rounded-xl text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/80 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Volver a Investigación Libre</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input oculto para subir archivos */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,.pdf,.txt"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+
               <input
                 type="text"
                 value={input}
@@ -1616,13 +2172,19 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
                 placeholder={
                   isLiveClassRecording
                     ? 'Grabando clase en vivo... Al terminar se enviará automáticamente a Nasser AI'
+                    : activeChatMode === 'calculator'
+                    ? 'Escribe la ecuación o ejercicio matemático a resolver paso a paso...'
+                    : activeChatMode === 'summary'
+                    ? 'Pega el texto o notas que deseas resumir y estructurar...'
+                    : activeChatMode === 'blackboard'
+                    ? 'Escribe apuntes o adjunta foto para transcribir y ordenar...'
                     : isInvestigationSession && activeInvestigation
                     ? `Pregunta lo que quieras saber sobre ${activeInvestigation.title}...`
                     : selectedSubject === 'General'
-                    ? 'Escribe tu consulta o inicia una grabación de clase en vivo...'
+                    ? 'Escribe tu consulta o usa (+) para herramientas...'
                     : `Investigar sobre ${selectedSubject}...`
                 }
-                className="w-full py-3 pl-4 pr-24 text-xs sm:text-sm text-gray-900 dark:text-white bg-transparent focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                className="w-full py-3 pl-3 pr-24 text-xs sm:text-sm text-gray-900 dark:text-white bg-transparent focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
               />
 
               {/* Botones de acción agrupados a la derecha: Grabación de clases en vivo + Enviar */}
@@ -1652,8 +2214,8 @@ Bajo NINGUNA circunstancia debes resumir el contenido de esta grabación de clas
                 {/* Botón de Enviar */}
                 <button
                   type="submit"
-                  disabled={isLoading || !input.trim()}
-                  className="p-2.5 rounded-2xl bg-[#00236f] hover:bg-[#1e3a8a] disabled:opacity-30 text-white shadow-sm transition active:scale-95 flex items-center justify-center shrink-0"
+                  disabled={isLoading || (!input.trim() && !attachedImage)}
+                  className="p-2.5 rounded-2xl bg-[#00236f] hover:bg-[#1e3a8a] disabled:opacity-30 text-white shadow-sm transition active:scale-95 flex items-center justify-center shrink-0 cursor-pointer"
                   title="Enviar consulta a Nasser IA"
                 >
                   <Send className="w-4 h-4" />

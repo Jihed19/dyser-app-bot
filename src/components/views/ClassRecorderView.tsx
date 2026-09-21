@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ActiveTab, ClassRecordingResult, LiveClassRecordingItem } from '../../types';
 import { sounds } from '../../services/soundEffects';
+import { trackGoalAction } from '../../services/academicGoals';
 import {
   saveAudioRecord,
   getAudioRecord,
@@ -367,6 +368,7 @@ export const ClassRecorderView: React.FC<ClassRecorderViewProps> = ({ onNavigate
     setNewRecordingTitle('');
     setLiveTranscript('');
     sounds.playSuccess();
+    trackGoalAction('class-recorder');
   };
 
   // 3. REPRODUCIR / PAUSAR AUDIO REAL

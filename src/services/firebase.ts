@@ -16,7 +16,9 @@ import {
 import { getAuth } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import { ChatSession, AcademicTask, StudentProfile } from '../types';
-import { initialAcademicTasks, initialStudentProfile, initialNasserChatHistory } from '../data/mockData';
+import { initialAcademicTasks, initialStudentProfile, initialNasserChatHistory, STUDENT_AVATAR } from '../data/mockData';
+import { generateDisserCode } from './disserCodeService';
+import { backupLocalTasksToVault } from './userVaultService';
 
 // Silenciar logs y advertencias internas de reconexión de Firestore para entornos en iframes o modo offline
 setLogLevel('silent');
@@ -66,50 +68,31 @@ if (typeof window !== 'undefined') {
 }
 
 // -------------------------------------------------------------
-// CLAVES DE CACHÉ LOCAL PARA RESILIENCIA OFFLINE
+// SESIÓN DE CHAT POR DEFECTO
 // -------------------------------------------------------------
-const LOCAL_STORAGE_KEYS = {
-  SESSIONS: 'dyser_firebase_chat_sessions_v1',
-  TASKS: 'dyser_firebase_academic_tasks_v1',
-  PROFILE: 'dyser_firebase_student_profile_v1',
-};
-
-// Sesión por defecto inicial (sin mensaje de bienvenida automático)
 export const defaultInitialSession: ChatSession = {
   id: 'session-main',
   title: 'Nueva Conversación',
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  messages: [], // Sin mensaje de bienvenida automático al iniciar el chat
+  messages: [],
   topic: 'General',
   isFavorite: false,
 };
 
 // -------------------------------------------------------------
-// HISTORIAL DE CHATS MULTISESIÓN (FIRESTORE + CACHÉ LOCAL)
+// HISTORIAL DE CHATS POR USUARIO (FIRESTORE: users/{uid}/chat_sessions)
 // -------------------------------------------------------------
 
 /**
- * Guarda o actualiza una sesión completa de chat en Firebase Firestore.
+ * Guarda o actualiza una sesión de chat en Firestore para el usuario autenticado.
  */
-export async function saveChatSessionToFirestore(session: ChatSession): Promise<void> {
-  // 1. Guardado en caché local inmediato para respuesta instantánea
-  try {
-    const localSessions = getLocalChatSessions();
-    const existingIdx = localSessions.findIndex(s => s.id === session.id);
-    if (existingIdx >= 0) {
-      localSessions[existingIdx] = session;
-    } else {
-      localSessions.unshift(session);
-    }
-    localStorage.setItem(LOCAL_STORAGE_KEYS.SESSIONS, JSON.stringify(localSessions));
-  } catch (localErr) {
-    console.warn('[Firebase] Fallo guardando en localStorage:', localErr);
-  }
+export async function saveChatSessionToFirestore(session: ChatSession, targetUid?: string): Promise<void> {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) return;
 
-  // 2. Guardado en Firebase Firestore
   try {
-    const sessionRef = doc(db, 'chat_sessions', session.id);
+    const sessionRef = doc(db, 'users', uid, 'chat_sessions', session.id);
     await setDoc(sessionRef, {
       id: session.id,
       title: session.title,
@@ -118,75 +101,44 @@ export async function saveChatSessionToFirestore(session: ChatSession): Promise<
       topic: session.topic || 'General',
       isFavorite: !!session.isFavorite,
       messages: session.messages,
+      userId: uid,
       lastSyncTimestamp: serverTimestamp(),
     }, { merge: true });
-    console.log(`[Firebase Firestore] Sesión "${session.title}" guardada exitosamente en dyser-c37d4.`);
   } catch (error: any) {
-    console.warn('[Firebase Firestore] Error sincronizando sesión a la nube (los datos se mantienen en caché local):', error?.message || error);
+    console.warn('[Firebase Firestore] Error guardando sesión de chat en la nube:', error?.message || error);
   }
 }
 
 /**
- * Elimina una sesión de chat tanto de Firestore como de la caché local.
+ * Elimina una sesión de chat de Firestore para el usuario autenticado.
  */
-export async function deleteChatSessionFromFirestore(sessionId: string): Promise<void> {
-  // 1. Limpieza local
-  try {
-    const localSessions = getLocalChatSessions().filter(s => s.id !== sessionId);
-    localStorage.setItem(LOCAL_STORAGE_KEYS.SESSIONS, JSON.stringify(localSessions));
-  } catch (err) {
-    console.warn('[Firebase] Error al limpiar sesión local:', err);
-  }
+export async function deleteChatSessionFromFirestore(sessionId: string, targetUid?: string): Promise<void> {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) return;
 
-  // 2. Borrado en Firestore
   try {
-    const sessionRef = doc(db, 'chat_sessions', sessionId);
+    const sessionRef = doc(db, 'users', uid, 'chat_sessions', sessionId);
     await deleteDoc(sessionRef);
-    console.log(`[Firebase Firestore] Sesión ${sessionId} eliminada en dyser-c37d4.`);
   } catch (error: any) {
-    console.warn('[Firebase Firestore] Error eliminando en la nube:', error?.message || error);
+    console.warn('[Firebase Firestore] Error eliminando sesión:', error?.message || error);
   }
 }
 
 /**
- * Obtiene las sesiones guardadas localmente.
+ * Suscripción en tiempo real a las sesiones de chat del usuario autenticado en Firestore.
  */
-export function getLocalChatSessions(): ChatSession[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_KEYS.SESSIONS);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Garantizar que ninguna sesión arranque con el mensaje de bienvenida de plantilla
-        const sanitized = parsed.map((s: ChatSession) => ({
-          ...s,
-          messages: (s.messages || []).filter(m =>
-            m && m.text &&
-            !m.text.includes('Soy Nasser IA') &&
-            !m.text.includes('Hola, Alejandro') &&
-            m.id !== 'init-1'
-          ),
-        }));
-        return sanitized;
-      }
-    }
-  } catch (e) {
-    console.warn('[Firebase] Error leyendo sesiones locales:', e);
+export function subscribeToChatSessions(
+  callback: (sessions: ChatSession[]) => void,
+  targetUid?: string
+): () => void {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) {
+    callback([defaultInitialSession]);
+    return () => {};
   }
-  return [defaultInitialSession];
-}
-
-/**
- * Suscripción en tiempo real a las sesiones de chat desde Firestore.
- * Si Firestore está vacío inicialmente, siembra la sesión por defecto.
- */
-export function subscribeToChatSessions(callback: (sessions: ChatSession[]) => void): () => void {
-  // Emitir inmediatamente lo local para evitar pantalla en blanco
-  const localInitial = getLocalChatSessions();
-  callback(localInitial);
 
   try {
-    const sessionsCol = collection(db, 'chat_sessions');
+    const sessionsCol = collection(db, 'users', uid, 'chat_sessions');
     const q = query(sessionsCol, orderBy('updatedAt', 'desc'));
 
     const unsubscribe = onSnapshot(
@@ -212,68 +164,57 @@ export function subscribeToChatSessions(callback: (sessions: ChatSession[]) => v
               isFavorite: data.isFavorite,
             };
           });
-
-          // Actualizar caché local
-          localStorage.setItem(LOCAL_STORAGE_KEYS.SESSIONS, JSON.stringify(sessions));
           callback(sessions);
         } else {
-          // Si está vacía en Firestore, sembramos la sesión inicial
-          saveChatSessionToFirestore(defaultInitialSession);
+          // Si el usuario aún no tiene sesiones en Firestore, inicia limpio
+          callback([defaultInitialSession]);
         }
       },
       (error) => {
-        console.warn('[Firebase Firestore] onSnapshot no disponible (modo offline o reglas estrictas):', error?.message || error);
-        // Mantiene los datos locales fluidos
-        callback(getLocalChatSessions());
+        // En caso de que se requiera índice o reglas, reintentar sin orderBy
+        try {
+          onSnapshot(sessionsCol, (snap) => {
+            const list: ChatSession[] = snap.docs.map(d => d.data() as ChatSession);
+            list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            callback(list.length > 0 ? list : [defaultInitialSession]);
+          });
+        } catch (_) {
+          callback([defaultInitialSession]);
+        }
       }
     );
 
     return unsubscribe;
   } catch (err) {
-    console.warn('[Firebase] Fallo al suscribirse a chat_sessions:', err);
+    callback([defaultInitialSession]);
     return () => {};
   }
 }
 
 // -------------------------------------------------------------
-// PERSISTENCIA DE TAREAS ACADÉMICAS (FIRESTORE + CACHÉ LOCAL)
+// PERSISTENCIA DE TAREAS ACADÉMICAS AISLADAS (FIRESTORE: users/{uid}/academic_tasks)
 // -------------------------------------------------------------
 
 export function getLocalAcademicTasks(): AcademicTask[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_KEYS.TASKS);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('[Firebase] Error leyendo tareas locales:', e);
-  }
-  return initialAcademicTasks;
+  // Retorna vacío por defecto para evitar arrastrar tareas globales previas
+  return [];
 }
 
-export async function saveAcademicTaskToFirestore(task: AcademicTask): Promise<void> {
-  // Local first
-  try {
-    const tasks = getLocalAcademicTasks();
-    const idx = tasks.findIndex(t => t.id === task.id);
-    if (idx >= 0) {
-      tasks[idx] = task;
-    } else {
-      tasks.unshift(task);
-    }
-    localStorage.setItem(LOCAL_STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-  } catch (e) {
-    console.warn('[Firebase] Error guardando tarea local:', e);
+/**
+ * Guarda una tarea académica en Firestore filtrada por el UID único del usuario autenticado.
+ */
+export async function saveAcademicTaskToFirestore(task: AcademicTask, targetUid?: string): Promise<void> {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) {
+    console.warn('[Firebase] No hay UID autenticado para guardar la tarea');
+    return;
   }
 
-  // Firestore
   try {
-    const taskRef = doc(db, 'academic_tasks', task.id);
+    const taskRef = doc(db, 'users', uid, 'academic_tasks', task.id);
     await setDoc(taskRef, {
       ...task,
+      userId: uid,
       updatedAt: serverTimestamp(),
     }, { merge: true });
   } catch (e: any) {
@@ -281,106 +222,175 @@ export async function saveAcademicTaskToFirestore(task: AcademicTask): Promise<v
   }
 }
 
-export async function deleteAcademicTaskFromFirestore(taskId: string): Promise<void> {
-  try {
-    const tasks = getLocalAcademicTasks().filter(t => t.id !== taskId);
-    localStorage.setItem(LOCAL_STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-  } catch (e) {
-    console.warn('[Firebase] Error borrando tarea local:', e);
-  }
+/**
+ * Elimina una tarea académica de Firestore para el usuario autenticado.
+ */
+export async function deleteAcademicTaskFromFirestore(taskId: string, targetUid?: string): Promise<void> {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) return;
 
   try {
-    await deleteDoc(doc(db, 'academic_tasks', taskId));
+    await deleteDoc(doc(db, 'users', uid, 'academic_tasks', taskId));
   } catch (e: any) {
     console.warn('[Firebase Firestore] Error borrando tarea en nube:', e?.message || e);
   }
 }
 
-export function subscribeToAcademicTasks(callback: (tasks: AcademicTask[]) => void): () => void {
-  callback(getLocalAcademicTasks());
+/**
+ * Suscripción en tiempo real a las tareas del usuario autenticado en Firestore.
+ * Si el usuario es nuevo y no tiene registros, entrega [] exactamente (interfaz en cero).
+ */
+export function subscribeToAcademicTasks(
+  callback: (tasks: AcademicTask[]) => void,
+  targetUid?: string
+): () => void {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) {
+    callback([]);
+    return () => {};
+  }
 
   try {
-    const tasksCol = collection(db, 'academic_tasks');
+    const tasksCol = collection(db, 'users', uid, 'academic_tasks');
     const unsubscribe = onSnapshot(
       tasksCol,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const tasks: AcademicTask[] = snapshot.docs.map(d => d.data() as AcademicTask);
-          localStorage.setItem(LOCAL_STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-          callback(tasks);
-        } else {
-          // Sembrar tareas iniciales en Firestore si la colección está vacía
-          initialAcademicTasks.forEach(task => saveAcademicTaskToFirestore(task));
-        }
+        const remoteTasks: AcademicTask[] = snapshot.docs.map(d => d.data() as AcademicTask);
+        // Si no hay tareas, se entrega lista vacía [] sin arrastrar tareas globales
+        remoteTasks.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+        callback(remoteTasks);
       },
       (error) => {
-        console.warn('[Firebase Firestore] Fallback local para tareas:', error?.message || error);
-        callback(getLocalAcademicTasks());
+        console.warn('[Firebase Firestore] Error en suscripción de tareas:', error?.message || error);
+        callback([]);
       }
     );
 
     return unsubscribe;
   } catch (err) {
+    callback([]);
     return () => {};
   }
 }
 
 // -------------------------------------------------------------
-// PERSISTENCIA DE PERFIL DEL ESTUDIANTE
+// PERSISTENCIA DE PERFIL DEL ESTUDIANTE (FIRESTORE: student_profiles/{uid})
 // -------------------------------------------------------------
 
-export function getLocalStudentProfile(): StudentProfile {
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_KEYS.PROFILE);
-    if (raw) {
-      return JSON.parse(raw);
-    }
-  } catch (e) {
-    console.warn('[Firebase] Error leyendo perfil local:', e);
-  }
-  return initialStudentProfile;
+export function getLocalStudentProfile(): StudentProfile | null {
+  return null;
 }
 
-export async function saveStudentProfileToFirestore(profile: StudentProfile): Promise<void> {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_KEYS.PROFILE, JSON.stringify(profile));
-  } catch (e) {}
+/**
+ * Guarda o actualiza el perfil del estudiante en Firestore vinculado al UID único.
+ */
+export async function saveStudentProfileToFirestore(
+  profile: StudentProfile,
+  targetUid?: string
+): Promise<StudentProfile> {
+  const uid = targetUid || profile.id || auth.currentUser?.uid;
+  if (!uid) {
+    throw new Error('No hay UID autenticado para guardar el perfil');
+  }
+
+  const disserCode = profile.dyserNumber || profile.disserCode || generateDisserCode(profile.name);
+  const enrichedProfile: StudentProfile = {
+    ...profile,
+    id: uid,
+    dyserNumber: disserCode,
+    dyserCode: disserCode,
+    disserCode: disserCode,
+  };
 
   try {
-    const profileRef = doc(db, 'student_profiles', 'current_student');
+    const profileRef = doc(db, 'student_profiles', uid);
     await setDoc(profileRef, {
-      ...profile,
+      ...enrichedProfile,
       updatedAt: serverTimestamp(),
     }, { merge: true });
   } catch (e: any) {
     console.warn('[Firebase Firestore] Error guardando perfil en nube:', e?.message || e);
   }
+
+  return enrichedProfile;
 }
 
-export function subscribeToStudentProfile(callback: (profile: StudentProfile) => void): () => void {
-  callback(getLocalStudentProfile());
+export async function registerStudentProfile(
+  profileData: Partial<StudentProfile> & { name: string },
+  targetUid?: string
+): Promise<StudentProfile> {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) {
+    throw new Error('No hay sesión de usuario autenticada');
+  }
+
+  const cleanName = profileData.name.trim();
+  const disserCode = generateDisserCode(cleanName);
+
+  const fullProfile: StudentProfile = {
+    id: uid,
+    name: cleanName,
+    avatar: STUDENT_AVATAR,
+    program: profileData.program || 'Educación Superior',
+    semester: profileData.semester || 'Ciclo Académico 2026',
+    gpa: profileData.gpa ?? 0.0,
+    attendanceRate: profileData.attendanceRate ?? 100,
+    streakDays: profileData.streakDays ?? 1,
+    completedTasksCount: 0,
+    dyserNumber: disserCode,
+    dyserCode: disserCode,
+    disserCode: disserCode,
+    onboardingCompleted: true,
+    ...profileData,
+  };
+
+  return await saveStudentProfileToFirestore(fullProfile, uid);
+}
+
+/**
+ * Suscripción en tiempo real al perfil del usuario autenticado en Firestore (student_profiles/{uid}).
+ * Si el usuario es nuevo y no tiene perfil previo, entrega null (sin arrastrar a Alejandro).
+ */
+export function subscribeToStudentProfile(
+  callback: (profile: StudentProfile | null) => void,
+  targetUid?: string
+): () => void {
+  const uid = targetUid || auth.currentUser?.uid;
+  if (!uid) {
+    callback(null);
+    return () => {};
+  }
 
   try {
-    const profileRef = doc(db, 'student_profiles', 'current_student');
+    const profileRef = doc(db, 'student_profiles', uid);
     const unsubscribe = onSnapshot(
       profileRef,
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data() as StudentProfile;
-          localStorage.setItem(LOCAL_STORAGE_KEYS.PROFILE, JSON.stringify(data));
-          callback(data);
+          const disserCode = data.dyserNumber || data.disserCode || generateDisserCode(data.name);
+          const synchronizedProfile: StudentProfile = {
+            ...data,
+            id: uid,
+            dyserNumber: disserCode,
+            dyserCode: disserCode,
+            disserCode: disserCode,
+          };
+          callback(synchronizedProfile);
         } else {
-          saveStudentProfileToFirestore(initialStudentProfile);
+          // Aislamiento estricto: no sembramos datos de prueba
+          callback(null);
         }
       },
       (error) => {
-        console.warn('[Firebase Firestore] Fallback local para perfil:', error?.message || error);
-        callback(getLocalStudentProfile());
+        console.warn('[Firebase Firestore] Error leyendo perfil del usuario:', error?.message || error);
+        callback(null);
       }
     );
 
     return unsubscribe;
   } catch (err) {
+    callback(null);
     return () => {};
   }
 }

@@ -15,6 +15,7 @@ import { SummaryResult } from '../../types';
 import { nasserAI, ResumenEstructurado } from '../../services/nasserEngines';
 import { sounds } from '../../services/soundEffects';
 import { exportSummaryToPdf } from '../../utils/summaryPdfExport';
+import { trackGoalAction } from '../../services/academicGoals';
 
 export const SummaryView: React.FC = () => {
   const [inputText, setInputText] = useState('');
@@ -88,6 +89,7 @@ El flujo de información genética celular sigue la ruta ADN -> ARN mensajero ->
       });
       const data = await res.json();
       setResult(data);
+      trackGoalAction('summary');
       sounds.playSuccess();
     } catch (err) {
       // Fallback cognitivo
@@ -118,6 +120,7 @@ El flujo de información genética celular sigue la ruta ADN -> ARN mensajero ->
         examWarning:
           '¡Atención para el examen! Recuerda distinguir claramente las causas de las consecuencias en este tema.',
       });
+      trackGoalAction('summary');
       sounds.playSuccess();
     } finally {
       setIsLoading(false);

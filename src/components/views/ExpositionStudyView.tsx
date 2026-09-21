@@ -12,6 +12,7 @@ import {
   Eye,
   CheckCircle2,
   ArrowRight,
+  ArrowLeft,
   MessageSquare,
   BookOpen,
   AlertTriangle,
@@ -25,23 +26,28 @@ import {
 import { ExpositionStudy, ExpositionPoint, ActiveTab } from '../../types';
 import { sounds } from '../../services/soundEffects';
 import { createMindMapDocument } from '../studio/studioInitialData';
+import { saveExposition } from '../../services/studyRoomsStorage';
 
-interface ExpositionStudyViewProps {
+export interface ExpositionStudyViewProps {
   initialTopic?: string;
   initialResearchContext?: string;
+  initialExpo?: ExpositionStudy;
   onNavigateTo?: (tab: ActiveTab) => void;
   onShowToast?: (toast: { title: string; message: string; type?: 'success' | 'warning' | 'error' | 'info' }) => void;
+  onBackToList?: () => void;
 }
 
 export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
   initialTopic,
   initialResearchContext,
+  initialExpo,
   onNavigateTo,
   onShowToast,
+  onBackToList,
 }) => {
   // 1. Estado del Tema y Contexto
   const [topic, setTopic] = useState<string>(() => {
-    return initialTopic || sessionStorage.getItem('dyser_active_expo_topic') || 'Arquitectura de Sistemas Distribuidos';
+    return initialExpo?.topic || initialTopic || sessionStorage.getItem('dyser_active_expo_topic') || 'Arquitectura de Sistemas Distribuidos';
   });
 
   const [researchContext, setResearchContext] = useState<string>(() => {
@@ -49,12 +55,12 @@ export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
   });
 
   // 2. Selección de Cantidad de Puntos (Fase Inicial del Embudo)
-  const [hasSelectedPoints, setHasSelectedPoints] = useState(false);
-  const [numPointsInput, setNumPointsInput] = useState<number>(3);
+  const [hasSelectedPoints, setHasSelectedPoints] = useState(() => !!initialExpo);
+  const [numPointsInput, setNumPointsInput] = useState<number>(() => initialExpo?.numPoints || 3);
   const [isGenerating, setIsGenerating] = useState(false);
 
   // 3. Estructura de la Exposición
-  const [exposition, setExposition] = useState<ExpositionStudy | null>(null);
+  const [exposition, setExposition] = useState<ExpositionStudy | null>(() => initialExpo || null);
 
   // 4. Modal de Corrección ("Así no es mi exposición" - Rediseñado con pestañas superiores sin scroll engorroso)
   const [isDualCorrectionOpen, setIsDualCorrectionOpen] = useState(false);
@@ -122,6 +128,7 @@ export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
         };
         setExposition(newExpo);
         setPreviewExposition(newExpo);
+        saveExposition(newExpo);
         setHasSelectedPoints(true);
         sounds.playSuccess();
         showToast({
@@ -166,6 +173,7 @@ export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
 
       setExposition(fallbackExpo);
       setPreviewExposition(fallbackExpo);
+      saveExposition(fallbackExpo);
       setHasSelectedPoints(true);
       sounds.playSuccess();
     } finally {
@@ -258,6 +266,7 @@ export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
   const handleApplyDualChanges = () => {
     if (previewExposition) {
       setExposition(previewExposition);
+      saveExposition(previewExposition);
       sounds.playSuccess();
       showToast({
         title: '¡Cambios aplicados! 🎉',
@@ -328,32 +337,46 @@ export const ExpositionStudyView: React.FC<ExpositionStudyViewProps> = ({
           </p>
         </div>
 
-        {/* Acciones Superiores si la exposición ya está estructurada */}
-        {hasSelectedPoints && exposition && (
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Botón "Así no es mi exposición" */}
+        {/* Acciones Superiores */}
+        <div className="flex flex-wrap items-center gap-2">
+          {onBackToList && (
             <button
-              id="btn-asi-no-es-mi-exposicion"
-              onClick={handleOpenDualCorrection}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 hover:bg-orange-100 dark:hover:bg-orange-900/60 text-[#fe6b00] border border-orange-200 dark:border-orange-800 text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
-              title="Corregir y ajustar la exposición en interfaz dual con Nasser AI"
+              type="button"
+              onClick={onBackToList}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 transition cursor-pointer"
+              title="Volver a Salas de Estudio"
             >
-              <Sliders className="w-4 h-4" />
-              <span>Así no es mi exposición</span>
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Volver a Exposiciones</span>
             </button>
+          )}
 
-            {/* Botón "Crear lámina para esta exposición" */}
-            <button
-              id="btn-crear-lamina-exposicion"
-              onClick={handleCreateMindMapSlide}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#00236f] to-[#1e3a8a] hover:from-[#fe6b00] hover:to-[#ea580c] text-white text-xs font-black shadow-md hover:shadow-lg transition-all active:scale-95 cursor-pointer group"
-              title="Abrir Nasser AI Studio y generar mapa mental visual automático"
-            >
-              <Palette className="w-4 h-4 text-amber-300 group-hover:rotate-12 transition-transform animate-pulse" />
-              <span>Crear una lámina para esta exposición</span>
-            </button>
-          </div>
-        )}
+          {/* Botón "Así no es mi exposición" */}
+          {hasSelectedPoints && exposition && (
+            <>
+              <button
+                id="btn-asi-no-es-mi-exposicion"
+                onClick={handleOpenDualCorrection}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 hover:bg-orange-100 dark:hover:bg-orange-900/60 text-[#fe6b00] border border-orange-200 dark:border-orange-800 text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
+                title="Corregir y ajustar la exposición en interfaz dual con Nasser AI"
+              >
+                <Sliders className="w-4 h-4" />
+                <span>Así no es mi exposición</span>
+              </button>
+
+              {/* Botón "Crear lámina para esta exposición" */}
+              <button
+                id="btn-crear-lamina-exposicion"
+                onClick={handleCreateMindMapSlide}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#00236f] to-[#1e3a8a] hover:from-[#fe6b00] hover:to-[#ea580c] text-white text-xs font-black shadow-md hover:shadow-lg transition-all active:scale-95 cursor-pointer group"
+                title="Abrir Nasser AI Studio y generar mapa mental visual automático"
+              >
+                <Palette className="w-4 h-4 text-amber-300 group-hover:rotate-12 transition-transform animate-pulse" />
+                <span>Crear una lámina para esta exposición</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 2. FASE INICIAL: SELECCIÓN DE CANTIDAD DE PUNTOS */}

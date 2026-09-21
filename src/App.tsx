@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
-import { FocusProvider } from './context/FocusContext';
 import { Header } from './components/Header';
 import { Drawer } from './components/Drawer';
 import { BottomNav } from './components/BottomNav';
@@ -19,23 +18,70 @@ import { ExamSimulatorView } from './components/views/ExamSimulatorView';
 import { ExpositionStudyView } from './components/views/ExpositionStudyView';
 import { CommunityView } from './components/views/CommunityView';
 import { OnboardingView } from './components/views/OnboardingView';
-import { initialStudentProfile, initialAcademicTasks } from './data/mockData';
+import { initialStudentProfile, initialAcademicTasks, STUDENT_AVATAR } from './data/mockData';
 import { ActiveTab, AcademicTask, StudentProfile } from './types';
-import { StreakView } from './components/views/StreakView';
 import { sounds } from './services/soundEffects';
+import { trackGoalAction } from './services/academicGoals';
 import {
   subscribeToAcademicTasks,
   saveAcademicTaskToFirestore,
   deleteAcademicTaskFromFirestore,
   subscribeToStudentProfile,
 } from './services/firebase';
+import {
+  isUserSessionActive,
+  getSavedSessionProfile,
+  logoutUser,
+  subscribeToAuthChanges,
+} from './services/authService';
 
 const AppContent: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return isUserSessionActive();
+  });
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const activeTabRef = useRef<ActiveTab>(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isStreakOpen, setIsStreakOpen] = useState(false);
-  const [student, setStudent] = useState<StudentProfile>(initialStudentProfile);
-  const [tasks, setTasks] = useState<AcademicTask[]>(initialAcademicTasks);
+  const [isSubinterface, setIsSubinterface] = useState<boolean>(false);
+  const [subinterfaceOrigin, setSubinterfaceOrigin] = useState<ActiveTab>('dashboard');
+
+  const handleOpenSubinterface = (targetTab: ActiveTab, originTab?: ActiveTab) => {
+    setSubinterfaceOrigin(originTab || activeTabRef.current);
+    setIsSubinterface(true);
+    setActiveTab(targetTab);
+  };
+
+  const handleExitSubinterface = () => {
+    setIsSubinterface(false);
+    setActiveTab(subinterfaceOrigin || 'dashboard');
+  };
+
+  const handleBottomNavSelect = (tab: ActiveTab) => {
+    setIsSubinterface(false);
+    setActiveTab(tab);
+  };
+  const [student, setStudent] = useState<StudentProfile>(() => {
+    const saved = getSavedSessionProfile();
+    return (
+      saved || {
+        name: '',
+        avatar: STUDENT_AVATAR,
+        program: 'Educación Superior',
+        semester: 'Ciclo Académico 2026',
+        gpa: 0.0,
+        attendanceRate: 100,
+        streakDays: 1,
+        completedTasksCount: 0,
+        onboardingCompleted: false,
+      }
+    );
+  });
+  // Inicialización en cero para que nuevos usuarios no arrastren tareas previas
+  const [tasks, setTasks] = useState<AcademicTask[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const hasNotifiedOverdueRef = useRef<boolean>(false);
 
@@ -109,28 +155,57 @@ const AppContent: React.FC = () => {
     }
   };
 
-  // Sincronización en tiempo real con Firebase Firestore
+  // Sincronización en tiempo real con Firebase Firestore aislada por UID del usuario autenticado
   useEffect(() => {
-    const unsubTasks = subscribeToAcademicTasks((loadedTasks) => {
-      if (loadedTasks && loadedTasks.length > 0) {
-        setTasks(loadedTasks);
-        // Revisar y notificar tareas atrasadas
-        const overdue = loadedTasks.filter((t) => t.isOverdue && t.status !== 'completada');
-        if (overdue.length > 0) {
-          notifyDeviceOverdueTasks(overdue);
+    let unsubTasks: (() => void) | null = null;
+    let unsubProfile: (() => void) | null = null;
+
+    const unsubAuth = subscribeToAuthChanges((firebaseUser) => {
+      // Limpiar suscripciones previas al cambiar de estado/usuario
+      if (unsubTasks) {
+        unsubTasks();
+        unsubTasks = null;
+      }
+      if (unsubProfile) {
+        unsubProfile();
+        unsubProfile = null;
+      }
+
+      if (firebaseUser) {
+        // Usuario autenticado en Firebase
+        unsubTasks = subscribeToAcademicTasks((loadedTasks) => {
+          // Si el usuario es nuevo, loadedTasks es [] y la interfaz carga completamente en cero
+          setTasks(loadedTasks || []);
+          if (loadedTasks && loadedTasks.length > 0) {
+            const overdue = loadedTasks.filter((t) => t.isOverdue && t.status !== 'completada');
+            if (overdue.length > 0) {
+              notifyDeviceOverdueTasks(overdue);
+            }
+          }
+        }, firebaseUser.uid);
+
+        unsubProfile = subscribeToStudentProfile((loadedProfile) => {
+          if (loadedProfile) {
+            setStudent(loadedProfile);
+            if (loadedProfile.onboardingCompleted) {
+              setIsAuthenticated(true);
+            }
+          }
+        }, firebaseUser.uid);
+      } else {
+        // Sin usuario autenticado en Firebase: verificar si hay sesión local
+        const hasSession = isUserSessionActive();
+        if (!hasSession) {
+          setIsAuthenticated(false);
+          setTasks([]);
         }
       }
     });
 
-    const unsubProfile = subscribeToStudentProfile((loadedProfile) => {
-      if (loadedProfile) {
-        setStudent(loadedProfile);
-      }
-    });
-
     return () => {
-      unsubTasks();
-      unsubProfile();
+      unsubAuth();
+      if (unsubTasks) unsubTasks();
+      if (unsubProfile) unsubProfile();
     };
   }, []);
 
@@ -142,9 +217,18 @@ const AppContent: React.FC = () => {
     }
 
     const handleDyserNav = (e: Event) => {
-      const customEvent = e as CustomEvent<ActiveTab>;
+      const customEvent = e as CustomEvent<ActiveTab | { tab: ActiveTab; asSubinterface?: boolean; origin?: ActiveTab }>;
       if (customEvent.detail) {
-        setActiveTab(customEvent.detail);
+        if (typeof customEvent.detail === 'string') {
+          handleOpenSubinterface(customEvent.detail, activeTabRef.current);
+        } else if (customEvent.detail.tab) {
+          if (customEvent.detail.asSubinterface === false) {
+            setIsSubinterface(false);
+            setActiveTab(customEvent.detail.tab);
+          } else {
+            handleOpenSubinterface(customEvent.detail.tab, customEvent.detail.origin || activeTabRef.current);
+          }
+        }
       }
     };
     window.addEventListener('dyser-navigate', handleDyserNav);
@@ -186,6 +270,7 @@ const AppContent: React.FC = () => {
 
           if (nextStatus === 'completada') {
             sounds.playSuccess();
+            trackGoalAction('tasks');
             addToast({
               title: '¡Tarea completada! 🎉',
               message: `Has terminado "${t.title}". ¡Sumaste +50 XP a tu progreso académico!`,
@@ -238,56 +323,74 @@ const AppContent: React.FC = () => {
             onAddTask={handleAddTask}
             onInvestigateTask={(task) => {
               sessionStorage.setItem('dyser_investigate_task', JSON.stringify(task));
-              setActiveTab('nasser-ia');
+              handleOpenSubinterface('nasser-ia', 'tasks');
             }}
-            onNavigateTo={(tab) => setActiveTab(tab)}
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, 'tasks')}
           />
         );
       case 'nasser-ia':
+      case 'summary':
+      case 'blackboard':
+      case 'problem-solver':
         return (
           <NasserChatView
+            key={`nasser-chat-${activeTab === 'summary' ? 'summary' : activeTab === 'blackboard' ? 'blackboard' : activeTab === 'problem-solver' ? 'calculator' : 'general'}`}
             studentName={student.name}
-            onNavigateTo={(tab) => setActiveTab(tab)}
+            initialChatMode={
+              activeTab === 'summary'
+                ? 'summary'
+                : activeTab === 'blackboard'
+                ? 'blackboard'
+                : activeTab === 'problem-solver'
+                ? 'calculator'
+                : null
+            }
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)}
             onAddTask={handleAddTask}
             onShowToast={addToast}
           />
         );
-      case 'summary':
-        return <SummaryView />;
       case 'multimedia':
         return <MultimediaCreatorView onShowToast={addToast} />;
-      case 'blackboard':
-        return <BlackboardView />;
       case 'class-recorder':
-        return <ClassRecorderView onNavigateTo={(tab) => setActiveTab(tab)} />;
-      case 'problem-solver':
-        return <ProblemSolverView />;
+        return <ClassRecorderView onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)} />;
       case 'study-rooms':
-        return <StudyRoomsView />;
+        return (
+          <StudyRoomsView
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)}
+            onShowToast={addToast}
+          />
+        );
       case 'exam-simulator':
         return (
           <ExamSimulatorView
-            onNavigateTo={(tab) => setActiveTab(tab)}
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)}
             onShowToast={addToast}
           />
         );
       case 'exposition-study':
         return (
           <ExpositionStudyView
-            onNavigateTo={(tab) => setActiveTab(tab)}
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)}
             onShowToast={addToast}
           />
         );
       case 'community':
-        return <CommunityView />;
-      case 'streak':
         return (
-          <StreakView
+          <CommunityView
             student={student}
-            onClose={() => setActiveTab('dashboard')}
-            onNavigateTo={(tab) => setActiveTab(tab)}
+            onNavigateTo={(tab) => handleOpenSubinterface(tab, activeTab)}
+            onShowToast={addToast}
           />
         );
+      case 'onboarding':
+        return (
+          <OnboardingView
+            onComplete={handleOnboardingComplete}
+            initialStudent={student}
+          />
+        );
+      case 'streak':
       case 'dashboard':
       default:
         return (
@@ -295,35 +398,91 @@ const AppContent: React.FC = () => {
             student={student}
             tasks={tasks}
             onToggleTask={handleToggleTask}
-            onNavigateTo={(tab) => setActiveTab(tab)}
-            onOpenStreak={() => setIsStreakOpen(true)}
+            onNavigateTo={(tab) => {
+              if (tab === 'tasks') {
+                setIsSubinterface(false);
+                setActiveTab('tasks');
+              } else {
+                handleOpenSubinterface(tab, 'dashboard');
+              }
+            }}
           />
         );
     }
   };
+
+  const handleOnboardingComplete = (newProfile: StudentProfile) => {
+    setStudent(newProfile);
+    setIsAuthenticated(true);
+    setIsSubinterface(false);
+    setActiveTab('dashboard');
+    addToast({
+      title: '¡Bienvenido a Dyser!',
+      message: `Perfil activado con éxito. Código Disser: ${newProfile.dyserNumber || newProfile.disserCode || ''}`,
+      type: 'success',
+    });
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setIsAuthenticated(false);
+    setIsSubinterface(false);
+    setTasks([]);
+    setStudent({
+      name: '',
+      avatar: STUDENT_AVATAR,
+      program: 'Educación Superior',
+      semester: 'Ciclo Académico 2026',
+      gpa: 0.0,
+      attendanceRate: 100,
+      streakDays: 1,
+      completedTasksCount: 0,
+      onboardingCompleted: false,
+    });
+    addToast({
+      title: 'Sesión finalizada',
+      message: 'Has cerrado sesión en tu dispositivo de forma segura.',
+      type: 'info',
+    });
+  };
+
+  // Si no hay sesión activa en el dispositivo, mostrar el flujo de Bienvenida y Onboarding
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#090d16] text-white font-sans">
+        <OnboardingView
+          onComplete={handleOnboardingComplete}
+          initialStudent={student}
+        />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f7f9fb] dark:bg-[#090d16] text-gray-900 dark:text-gray-100 transition-colors duration-200 flex flex-col font-sans">
       <Header
         onOpenDrawer={() => setIsDrawerOpen(true)}
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleBottomNavSelect}
         unreadCount={hasOverdueTasks ? 1 : 0}
-        onOpenStreak={() => setIsStreakOpen(true)}
-        streakDays={student.streakDays || 152}
+        student={student}
+        onLogout={handleLogout}
+        isSubinterface={isSubinterface}
+        onExitSubinterface={handleExitSubinterface}
       />
 
       <Drawer
         isOpen={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={(tab) => handleOpenSubinterface(tab, activeTab)}
         student={student}
         pendingTasksCount={pendingTasksCount}
       />
 
       {/* Main Academic Workspace Container con transiciones suaves framer-motion */}
-      <main className="flex-1 max-w-7xl w-full mx-auto pt-20 pb-24 lg:pb-12 px-4 sm:px-6">
+      <main className={`flex-1 max-w-7xl w-full mx-auto pt-20 px-4 sm:px-6 transition-all duration-200 ${isSubinterface ? 'pb-4 lg:pb-6' : 'pb-24 lg:pb-12'}`}>
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -341,28 +500,18 @@ const AppContent: React.FC = () => {
       {/* Sistema de Notificaciones Toast flotante */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
 
-      {/* Modal de Días de Estudio y Constancia */}
-      {isStreakOpen && (
-        <StreakView
-          student={student}
-          onClose={() => setIsStreakOpen(false)}
-          onNavigateTo={(tab) => {
-            setIsStreakOpen(false);
-            setActiveTab(tab);
-          }}
-        />
+      {/* Mobile Bottom Navigation - oculto en modo subinterfaz pantalla completa */}
+      {!isSubinterface && (
+        <div className="lg:hidden">
+          <BottomNav
+            activeTab={activeTab}
+            onSelectTab={handleBottomNavSelect}
+            onOpenToolsDrawer={() => setIsDrawerOpen(true)}
+            pendingTasksCount={pendingTasksCount}
+            hasOverdueTasks={hasOverdueTasks}
+          />
+        </div>
       )}
-
-      {/* Mobile Bottom Navigation */}
-      <div className="lg:hidden">
-        <BottomNav
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-          onOpenToolsDrawer={() => setIsDrawerOpen(true)}
-          pendingTasksCount={pendingTasksCount}
-          hasOverdueTasks={hasOverdueTasks}
-        />
-      </div>
     </div>
   );
 };
@@ -370,9 +519,7 @@ const AppContent: React.FC = () => {
 export default function App() {
   return (
     <ThemeProvider>
-      <FocusProvider>
-        <AppContent />
-      </FocusProvider>
+      <AppContent />
     </ThemeProvider>
   );
 }

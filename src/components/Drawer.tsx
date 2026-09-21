@@ -1,8 +1,6 @@
 import React from 'react';
 import {
   X,
-  LayoutDashboard,
-  CheckSquare,
   Bot,
   FileText,
   Mic,
@@ -13,7 +11,6 @@ import {
   Palette,
   Sun,
   Moon,
-  Flame,
   MessageSquareQuote,
   Layers,
 } from 'lucide-react';
@@ -27,7 +24,7 @@ interface DrawerProps {
   activeTab: ActiveTab;
   onSelectTab: (tab: ActiveTab) => void;
   student: StudentProfile;
-  pendingTasksCount: number;
+  pendingTasksCount?: number;
 }
 
 export const Drawer: React.FC<DrawerProps> = ({
@@ -36,7 +33,6 @@ export const Drawer: React.FC<DrawerProps> = ({
   activeTab,
   onSelectTab,
   student,
-  pendingTasksCount,
 }) => {
   const { theme, toggleTheme } = useTheme();
 
@@ -44,61 +40,26 @@ export const Drawer: React.FC<DrawerProps> = ({
 
   const sections = [
     {
-      title: 'Principal',
-      items: [
-        {
-          id: 'dashboard' as ActiveTab,
-          label: 'Inicio',
-          icon: LayoutDashboard,
-          badge: `${student.gpa} GPA`,
-        },
-        {
-          id: 'tasks' as ActiveTab,
-          label: 'Tareas y Entregas',
-          icon: CheckSquare,
-          badge: pendingTasksCount > 0 ? `${pendingTasksCount}` : undefined,
-          badgeColor: 'bg-[#fe6b00] text-white',
-        },
-        {
-          id: 'streak' as ActiveTab,
-          label: 'Días de Racha',
-          icon: Flame,
-          badge: `${student.streakDays || 152} días`,
-          badgeColor: 'bg-orange-500 text-white',
-        },
-      ],
-    },
-    {
-      title: 'Tutor & Asistencia IA',
+      title: 'Tutor y Asistencia de IA',
       items: [
         {
           id: 'nasser-ia' as ActiveTab,
-          label: 'Tutor Nasser IA',
+          label: 'Nasser AI',
           icon: Bot,
-          badge: '24/7',
-          badgeColor: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300',
+          badge: 'IA',
+          badgeColor: 'bg-blue-50 text-[#00236f] dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/50 dark:border-blue-900/40',
         },
-        {
-          id: 'problem-solver' as ActiveTab,
-          label: 'Solucionador de Problemas',
-          icon: Calculator,
-        },
-      ],
-    },
-    {
-      title: 'Guías',
-      items: [
         {
           id: 'multimedia' as ActiveTab,
           label: 'Nasser AI Studio',
           icon: Palette,
-          badge: 'Estudio Pro',
-          badgeColor: 'bg-gradient-to-r from-[#00236f] to-[#fe6b00] text-white',
+          badge: 'Studio',
+          badgeColor: 'bg-orange-50 text-[#fe6b00] dark:bg-orange-950/60 dark:text-orange-300 border border-orange-200/50 dark:border-orange-900/40',
         },
       ],
     },
     {
-      title: 'Estudio & Creación',
+      title: 'Estudio y Creación',
       items: [
         {
           id: 'summary' as ActiveTab,
@@ -117,34 +78,35 @@ export const Drawer: React.FC<DrawerProps> = ({
         },
         {
           id: 'exposition-study' as ActiveTab,
-          label: 'Estudio de Exposición',
+          label: 'Estudio de exposición',
           icon: Layers,
-          badge: 'Oratoria',
-          badgeColor: 'bg-orange-100 text-[#fe6b00] dark:bg-orange-950 dark:text-orange-300',
         },
         {
           id: 'blackboard' as ActiveTab,
           label: 'Digitalizar Pizarra',
           icon: Camera,
         },
+        {
+          id: 'problem-solver' as ActiveTab,
+          label: 'Calculador',
+          icon: Calculator,
+        },
       ],
     },
     {
-      title: 'Comunidad & Salas',
+      title: 'Comunidad y Salas',
       items: [
         {
           id: 'community' as ActiveTab,
-          label: 'Foro de la Comunidad',
+          label: 'Comunidad',
           icon: MessageSquareQuote,
-          badge: 'Foro',
-          badgeColor: 'bg-blue-100 text-[#00236f] dark:bg-blue-950 dark:text-blue-300',
         },
         {
           id: 'study-rooms' as ActiveTab,
           label: 'Salas de Estudio',
           icon: Users,
           badge: 'En vivo',
-          badgeColor: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300',
+          badgeColor: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/50 dark:border-emerald-900/40',
         },
       ],
     },
@@ -185,8 +147,9 @@ export const Drawer: React.FC<DrawerProps> = ({
           </div>
 
           <button
+            id="drawer-close-button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+            className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition cursor-pointer"
             aria-label="Cerrar panel"
           >
             <X className="w-5 h-5" />
@@ -211,10 +174,10 @@ export const Drawer: React.FC<DrawerProps> = ({
         </div>
 
         {/* Menú de Navegación Organizado en Secciones */}
-        <nav className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
+        <nav id="drawer-nav-container" className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
           {sections.map(sec => (
             <div key={sec.title} className="space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 px-3 block">
+              <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 dark:text-gray-500 px-3 block">
                 {sec.title}
               </span>
               {sec.items.map(item => {
@@ -223,11 +186,12 @@ export const Drawer: React.FC<DrawerProps> = ({
                 return (
                   <button
                     key={item.id}
+                    id={`drawer-nav-item-${item.id}`}
                     onClick={() => handleItemClick(item.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer active:scale-[0.99] ${
                       isActive
                         ? 'bg-[#00236f] text-white shadow-xs'
-                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800/60'
+                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800/70 hover:text-[#00236f] dark:hover:text-white'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -259,13 +223,12 @@ export const Drawer: React.FC<DrawerProps> = ({
 
         {/* Pie del Drawer con Tema */}
         <div className="p-3 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-[#0c101b] flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">
-              Tema {theme === 'light' ? 'Claro' : 'Oscuro'}
-            </span>
-          </div>
+          <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+            Tema {theme === 'light' ? 'Claro' : 'Oscuro'}
+          </span>
 
           <button
+            id="drawer-theme-toggle"
             onClick={toggleTheme}
             className="p-2 rounded-xl text-gray-500 dark:text-gray-400 hover:bg-gray-200/60 dark:hover:bg-gray-800 transition cursor-pointer"
             title="Alternar tema claro/oscuro"

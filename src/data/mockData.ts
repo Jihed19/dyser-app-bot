@@ -20,6 +20,9 @@ export const initialStudentProfile: StudentProfile = {
   attendanceRate: 98,
   streakDays: 14,
   completedTasksCount: 18,
+  dyserNumber: '1 60 10',
+  dyserCode: '1 60 10',
+  disserCode: '1 60 10',
 };
 
 export const initialAcademicTasks: AcademicTask[] = [

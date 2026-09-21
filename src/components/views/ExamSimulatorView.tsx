@@ -28,18 +28,31 @@ import { ExamSimulation, ExamQuestion, QuestionType, ActiveTab } from '../../typ
 import { sampleExamSimulation } from '../../data/mockData';
 import { nasserAI } from '../../services/nasserEngines';
 import { sounds } from '../../services/soundEffects';
+import { trackGoalAction } from '../../services/academicGoals';
+import { saveExam } from '../../services/studyRoomsStorage';
 
-interface ExamSimulatorViewProps {
+export interface ExamSimulatorViewProps {
+  initialExam?: ExamSimulation;
   onNavigateTo?: (tab: ActiveTab) => void;
   onShowToast?: (toast: { title: string; message: string; type?: 'success' | 'warning' | 'error' | 'info' }) => void;
+  onBackToList?: () => void;
 }
 
 export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
+  initialExam,
   onNavigateTo,
   onShowToast,
+  onBackToList,
 }) => {
-  const [exam, setExam] = useState<ExamSimulation>(sampleExamSimulation);
+  const [exam, setExam] = useState<ExamSimulation>(() => initialExam || sampleExamSimulation);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+
+  useEffect(() => {
+    if (initialExam) {
+      setExam(initialExam);
+      restartDuolingoPractice(initialExam.questions);
+    }
+  }, [initialExam]);
   
   // Duolingo Practice State
   const [selectedOptionIdx, setSelectedOptionIdx] = useState<number | null>(null);
@@ -129,6 +142,7 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
           };
 
           setExam(newExam);
+          saveExam(newExam);
           restartDuolingoPractice(formattedQuestions);
           setResearchNotice(`Práctica generada desde tu investigación: "${topic}"`);
           sounds.playSuccess();
@@ -164,6 +178,7 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
       };
 
       setExam(newExam);
+      saveExam(newExam);
       restartDuolingoPractice(formatted);
       setResearchNotice(`Práctica generada para: "${topic}"`);
       sounds.playSuccess();
@@ -199,6 +214,7 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
 
     setIsAnswerChecked(true);
     setIsAnswerCorrect(isCorrect);
+    trackGoalAction('exam-simulator');
 
     setAnsweredHistory(prev => ({
       ...prev,
@@ -304,10 +320,12 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
   // Botón "Listo": aplica los cambios y arranca inmediatamente la práctica
   const handleApplyDualExamAndStart = () => {
     if (previewQuestions && previewQuestions.length > 0) {
-      setExam(prev => ({
-        ...prev,
+      const updatedExam = {
+        ...exam,
         questions: previewQuestions,
-      }));
+      };
+      setExam(updatedExam);
+      saveExam(updatedExam);
       restartDuolingoPractice(previewQuestions);
       sounds.playSuccess();
       if (onShowToast) {
@@ -347,8 +365,20 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
       {/* 2. BARRA SUPERIOR ESTILO DUOLINGO: VIDAS, RACHA, XP Y BOTÓN DE CORRECCIÓN */}
       <div className="p-4 rounded-3xl bg-white dark:bg-[#111728] border border-gray-200/80 dark:border-gray-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
         
-        {/* Métricas Duolingo */}
-        <div className="flex items-center gap-4">
+        {/* Métricas Duolingo y Botón Volver */}
+        <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+          {onBackToList && (
+            <button
+              type="button"
+              onClick={onBackToList}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 transition cursor-pointer"
+              title="Volver a Salas de Estudio"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Volver a Exámenes</span>
+            </button>
+          )}
+
           {/* Corazones / Vidas */}
           <div className="flex items-center gap-1.5" title="Vidas restantes">
             <Heart className={`w-5 h-5 ${hearts > 0 ? 'text-red-500 fill-red-500 animate-bounce' : 'text-gray-300'}`} />
@@ -426,6 +456,16 @@ export const ExamSimulatorView: React.FC<ExamSimulatorViewProps> = ({
 
           {/* Botones de Acción Final */}
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {onBackToList && (
+              <button
+                onClick={onBackToList}
+                className="px-5 py-3 rounded-2xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold text-xs sm:text-sm transition active:scale-95 flex items-center gap-2 cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Volver a Salas de Estudio</span>
+              </button>
+            )}
+
             <button
               onClick={() => restartDuolingoPractice()}
               className="px-6 py-3 rounded-2xl bg-[#00236f] hover:bg-[#142c6b] text-white font-black text-xs sm:text-sm shadow-md transition active:scale-95 flex items-center gap-2 cursor-pointer"

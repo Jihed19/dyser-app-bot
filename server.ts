@@ -42,6 +42,39 @@ const NASSER_MODELS = [
 ];
 
 /**
+ * Elimina cualquier saludo, presentación personal o preámbulo corporativo introductorio
+ * para asegurar respuestas que van directo al grano desde la primera línea.
+ */
+export function limpiarPreambulosYPresentaciones(texto: string): string {
+  if (!texto) return '';
+  let res = texto.trim();
+
+  const patrones = [
+    /^(?:¡?hola(?:,?\s*estudiante|,?\s*amig[oa]| a tod[oa]s)?!?|saludos(?: cordiales)?[\.\!\:]?|buenos días[\.\!\:]?|buenas tardes[\.\!\:]?|buenas noches[\.\!\:]?|bienvenid[oa]s?(?:\s+a\s+(?:dyser|nasser\s*ai))?[\.\!\:]?)\s*/i,
+    /^(?:soy|mi nombre es)\s+nasser\s+ai[,\.\s\-]*(?:tu|su)?\s*(?:asistente|tutor|motor)?[^\n\.]*[\.\n]+/i,
+    /^(?:como\s+asistente\s+de\s+investigación[^\n\.]*[\.\n]+)/i,
+    /^(?:(?:hoy\s+)?(?:abordaremos|analizaremos|explicaremos|veremos|revisaremos|estudiaremos)\s+(?:el\s+concepto\s+de|el\s+tema\s+de|a\s+fondo|la\s+temática)?[^\n\.]*[\.\n]+)/i,
+    /^(?:a\s+continuación,?\s*(?:presento|se\s+presenta|analizaremos|revisaremos|te\s+explico)[^\n\.]*[\.\n]+)/i,
+    /^(?:con\s+gusto\s+(?:te\s+ayudo|respondo|te\s+explico)[^\n\.]*[\.\n]+)/i,
+  ];
+
+  let modificado = true;
+  let iteraciones = 0;
+  while (modificado && iteraciones < 6) {
+    modificado = false;
+    iteraciones++;
+    for (const pat of patrones) {
+      if (pat.test(res)) {
+        res = res.replace(pat, '').trim();
+        modificado = true;
+      }
+    }
+  }
+
+  return res;
+}
+
+/**
  * Función principal oficial para conectar con Nasser AI
  * Configurada con ThinkingLevel.MINIMAL y prompt de investigación académica autónoma con rigor científico.
  * Admite de forma nativa entrada multimodal (audio grabado o fotos de pizarrón).
@@ -53,7 +86,26 @@ export async function consultarNasserAI(
   const ai = getNasserAI();
 
   const systemInstruction =
-    'Eres Nasser AI, un asistente de investigación académica autónomo y de élite, superior a los modelos estándar. Respondes estrictamente en español, aplicando un rigor científico riguroso, fact-checking y autocorrección. Tu objetivo es proveer información profunda y estructurada (con negritas, viñetas y desgloses lógicos) que luego el sistema local de dyser procesará para generar exámenes, tareas y exposiciones.\n\nREGLA ESTRICTA DE LENGUAJE NATURAL Y CERO CÓDIGO CRUDO / LATEX: Está estrictamente prohibido devolver fórmulas en LaTeX crudo (como \\frac, \\begin{equation}, \\times, backslashes sueltos, $$ o bloques de código de sintaxis). Todo concepto matemático, técnico o científico debe explicarse con lenguaje natural impecable, claro y comprensible para el estudiante, utilizando texto continuo o caracteres Unicode legibles y limpios (por ejemplo: "E = m · c²", "a / b", "la raíz cuadrada de x", "la derivada de la función respecto al tiempo"). Cero código crudo o wrappers innecesarios.\n\nREGLA ESTRICTA DE PROCESAMIENTO PARA "GRABACIÓN DE CLASES EN VIVO": Bajo ninguna circunstancia debes resumir el contenido de la grabación de clases en vivo. Tienes la prohibición absoluta de recortar, condensar o resumir. Debes respetar de forma íntegra cada palabra transcrita, limitándote exclusivamente a transcribir y ordenar de forma pulcra, extensa y detallada toda la información escuchada, punto por punto, estructurada limpiamente con negritas, viñetas y desgloses lógicos rigurosos, manteniendo todo el contexto original sin recortes y citando textualmente las advertencias del docente.';
+`Eres Nasser AI, motor autónomo de investigación científica y académica de élite en dyser. Respondes con el más riguroso nivel técnico, formal y explicativo, estructurado con negritas, listas y desgloses lógicos.
+
+DIRECTRIZ SUPREMA OBLIGATORIA: CERO SALUDOS, CERO PRESENTACIONES Y RESPUESTA INMEDIATA (IR DIRECTO AL GRANO)
+1. PROHIBICIÓN ABSOLUTA DE SALUDOS Y PRESENTACIONES:
+   - Queda ESTRICTAMENTE PROHIBIDO iniciar tu respuesta presentándote ("Soy Nasser AI...", "Saludos. Soy Nasser AI, su asistente de investigación...", "Hola", "Bienvenido", etc.). El estudiante ya conoce la plataforma y tu nombre.
+   - Queda ESTRICTAMENTE PROHIBIDO usar preámbulos introductorios o frases de transición ("Abordaremos el concepto de...", "En esta investigación analizaremos...", "A continuación explicaré...", "Con gusto te ayudo...", etc.).
+2. RESPUESTA INMEDIATA DESDE LA PRIMERA PALABRA:
+   - Tu primera línea DEBE COMENZAR INMEDIATAMENTE con el contenido sustancial, definición técnica o respuesta directa al tema consultado.
+   - Ejemplo si preguntan por el átomo:
+     CORRECTO: "El átomo es la unidad estructural fundamental de la materia, compuesto por un núcleo denso de protones y neutrones..."
+     PROHIBIDO: "Saludos. Soy Nasser AI, su asistente de investigación. Abordaremos el concepto del átomo..."
+3. TONO Y FORMATO:
+   - Mantén un tono académico, formal, riguroso y conciso sin preámbulos.
+   - Utiliza negritas estratégicas en términos clave, listas estructuradas y viñetas para desglosar la información.
+
+REGLA ESTRICTA DE LENGUAJE NATURAL Y CERO CÓDIGO CRUDO / LATEX:
+Está estrictamente prohibido devolver fórmulas en LaTeX crudo (como \\frac, \\begin{equation}, \\times, backslashes sueltos, $$ o bloques de código de sintaxis). Todo concepto matemático, técnico o científico debe explicarse con lenguaje natural impecable, claro y comprensible para el estudiante, utilizando texto continuo o caracteres Unicode legibles y limpios (por ejemplo: "E = m · c²", "a / b", "la raíz cuadrada de x", "la derivada de la función respecto al tiempo"). Cero código crudo o wrappers innecesarios.
+
+REGLA ESTRICTA DE PROCESAMIENTO PARA "GRABACIÓN DE CLASES EN VIVO":
+Bajo ninguna circunstancia debes resumir el contenido de la grabación de clases en vivo. Tienes la prohibición absoluta de recortar, condensar o resumir. Debes respetar de forma íntegra cada palabra transcrita, limitándote exclusivamente a transcribir y ordenar de forma pulcra, extensa y detallada toda la información escuchada, punto por punto, estructurada limpiamente con negritas, viñetas y desgloses lógicos rigurosos, manteniendo todo el contexto original sin recortes y citando textualmente las advertencias del docente.`;
 
   const parts: any[] = [];
   if (mediaData && mediaData.data) {
@@ -99,7 +151,7 @@ export async function consultarNasserAI(
       }
 
       if (respuestaCompleta.trim()) {
-        return respuestaCompleta;
+        return limpiarPreambulosYPresentaciones(respuestaCompleta);
       }
     } catch (modelError: any) {
       const msg = modelError?.message || String(modelError);
@@ -116,7 +168,7 @@ export async function consultarNasserAI(
         config: configDirect,
       });
       if (fallbackResponse.text && fallbackResponse.text.trim()) {
-        return fallbackResponse.text;
+        return limpiarPreambulosYPresentaciones(fallbackResponse.text);
       }
     } catch (directErr: any) {
       // Continuar al siguiente
@@ -327,21 +379,25 @@ app.post('/api/ai/blackboard', async (req, res) => {
       cleanBase64 = rawImage.replace(/^data:image\/\w+;base64,/, '');
     }
 
-    const systemInstruction = `Eres el módulo de digitalización de pizarras "Foto a la Pizarra" de dyser.
-Tu labor es interpretar fotos o esquemas tomados de pizarrones escolares o universitarios.
-Transformas trazos apresurados, ecuaciones manuscritas, diagramas en tiza/marcador y flechas en apuntes perfectamente organizados punto por punto en Markdown claro, con títulos, ecuaciones explicadas y diagrama conceptual simplificado en texto.
+    const systemInstruction = `Eres el módulo oficial de Digitalización de Pizarra ("Foto a la Pizarra") de dyser con Nasser AI.
+REGLA SUPREMA Y OBLIGATORIA: CERO RESÚMENES GENÉRICOS.
+El objetivo NO es redactar un resumen genérico ni condensar el contenido.
+Tu misión exclusiva es transcribir, ordenar, limpiar y estructurar formalmente el contenido exacto escrito en la pizarra o pizarrón.
+Interpreta fotos de pizarras escolares o universitarias con trazos apresurados, tiza, marcador o borrones.
+Limpia cada anotación y ordénala punto por punto con fidelidad absoluta al texto original, preservando todas las fórmulas matemáticas, notas del docente, diagramas y listas tal como están en la pizarra.
 Devuelve SIEMPRE un objeto JSON estrictamente válido.`;
 
-    const promptText = `Organiza y transcribe exhaustivamente esta pizarra de clase de la materia: "${subject}".
-${description ? `Contexto adicional del alumno: ${description}` : ''}
+    const promptText = `Digitaliza fielmente esta pizarra de clase de la materia: "${subject}".
+${description ? `Contexto o aclaraciones adicionales: ${description}` : ''}
+RECUERDA: No hagas un resumen genérico. Tu objetivo es transcribir, ordenar, limpiar y estructurar formalmente el contenido exacto escrito en la pizarra.
 
 Devuelve EXCLUSIVAMENTE un JSON con la siguiente estructura:
 {
-  "boardTitle": "Título conciso y profesional del tema",
-  "rawTranscription": "Transcripción secuencial de las anotaciones de la pizarra numerada línea a línea",
-  "latexFormulas": ["\\\\hat{H}\\\\Psi = E\\\\Psi", "\\\\int_{-\\\\infty}^{\\\\infty} |\\\\Psi|^2 dx = 1"],
-  "diagramDescription": "Descripción textual del diagrama, circuito o gráfica de la pizarra",
-  "structuredNotes": "### Apuntes Organizados\\n- **Concepto clave:** Explicación pedagógica\\n- **Puntos de examen:** Advertencias destacadas"
+  "boardTitle": "Título formal y preciso del contenido de la pizarra",
+  "rawTranscription": "Transcripción limpia, ordenada y exacta de todas las anotaciones de la pizarra numeradas punto por punto",
+  "latexFormulas": ["Ecuaciones exactas presentes en la pizarra transcritas limpiamente"],
+  "diagramDescription": "Descripción textual fidedigna del diagrama, esquema o gráfico dibujado en la pizarra",
+  "structuredNotes": "### Contenido de la Pizarra Estructurado\\n- **Anotación / Concepto:** Contenido exacto ordenado\\n- **Desarrollo:** Fórmulas y notas exactas de la pizarra"
 }`;
 
     const parts: any[] = [];
@@ -1396,6 +1452,23 @@ Responde exclusivamente con este JSON:
       },
     });
   }
+});
+
+// Endpoint de Arquitectura: Información de versión y estado de release centralizado
+app.get('/api/app/release', (req, res) => {
+  res.json({
+    status: 'online',
+    buildId: 'dyser-release-2026.09.19-pwa-v2.5',
+    version: '2.5.0-centralized-sync',
+    buildTimestamp: 1789854500000,
+    architecture: 'dual-rail-isolated-vault',
+    railPlatform: 'firebase-firestore-realtime',
+    railUserStorage: 'indexeddb-protected-device-vault',
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
 // Global error handling middleware for API routes
